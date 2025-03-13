@@ -8,9 +8,9 @@ logger = get_logger(__name__)
 
 class UserRole:
     """用户角色"""
-    ROOT_ADMIN = "ROOT_ADMIN"  # 超级管理员（root-admin）
-    WECOM_ADMIN = "WECOM_ADMIN"  # 企业微信管理员
-    NORMAL = "NORMAL"           # 普通用户
+    ROOT_ADMIN = "ROOT_ADMIN"     # 超级管理员（root-admin）
+    WECOM_ADMIN = "WECOM_ADMIN"   # 企业微信管理员
+    NORMAL = "NORMAL"             # 普通用户
 
 class User(BaseModel):
     """用户模型"""
@@ -23,10 +23,10 @@ class User(BaseModel):
     role = Column(String(20), nullable=False, default=UserRole.NORMAL, comment="用户角色")
     
     # 企业信息
-    corpname = Column(String(100), nullable=False, comment="所属企业名称")
-    corpid = Column(String(50), nullable=False, comment="企业ID")
-    corpsecret = Column(String(100), nullable=False, comment="企业应用Secret")
-    agentid = Column(String(50), nullable=False, comment="应用ID")
+    corpname = Column(String(100), nullable=True, comment="所属企业名称")
+    corpid = Column(String(50), nullable=True, comment="企业ID")
+    corpsecret = Column(String(100), nullable=True, comment="企业应用Secret")
+    agentid = Column(String(50), nullable=True, comment="应用ID")
     
     # 管理员信息
     is_admin = Column(Boolean, default=False, comment="是否为管理员")

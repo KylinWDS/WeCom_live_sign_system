@@ -7,6 +7,12 @@ from pathlib import Path
 from loguru import logger
 from src.core.config_manager import ConfigManager
 
+# 初始化ConfigManager
+config_manager = ConfigManager()
+
+# 移除延迟导入ConfigManager以避免循环导入
+# ConfigManager = None
+
 class Logger:
     """日志管理器"""
     
@@ -16,7 +22,7 @@ class Logger:
         Args:
             log_dir: 日志目录
         """
-        self.config_manager = ConfigManager()
+        self.config_manager = config_manager
         self.log_dir = Path(self.config_manager.get("system.log_path", log_dir))
         self.log_level = self.config_manager.get("system.log_level", "INFO")
         self.log_retention = self.config_manager.get("system.log_retention", 30)
@@ -50,17 +56,6 @@ class Logger:
             format="{time:HH:mm:ss} | {level} | {message}",
             colorize=True
         )
-        
-    def get_logger(self, name: str) -> logging.Logger:
-        """获取日志记录器
-        
-        Args:
-            name: 日志记录器名称
-            
-        Returns:
-            logging.Logger: 日志记录器
-        """
-        return logger.bind(name=name)
         
     def log_operation(self, user: str, operation: str, details: Optional[str] = None):
         """记录用户操作
@@ -361,14 +356,13 @@ class Logger:
 # 创建全局日志管理器实例
 logger_manager = Logger()
 
-# 导出get_logger函数
-def get_logger(name: str) -> logging.Logger:
-    """获取日志记录器
+def get_logger(name: str = None) -> logger:
+    """获取日志记录器实例
     
     Args:
-        name: 日志记录器名称
+        name: 记录器名称
         
     Returns:
-        logging.Logger: 日志记录器
+        logger: loguru的logger实例
     """
-    return logger_manager.get_logger(name) 
+    return logger.bind(name=name) 

@@ -4,13 +4,13 @@ from PySide6.QtWidgets import (QWizard, QWizardPage, QVBoxLayout, QHBoxLayout,
                              QSpinBox)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
-from ..managers.style import StyleManager
-from ..utils.widget_utils import WidgetUtils
-from utils.logger import get_logger
-from utils.error_handler import ErrorHandler
-from core.database import DatabaseManager
-from models.corp import CorpInfo
-from models.user import User, UserRole
+from src.ui.managers.style import StyleManager
+from src.ui.utils.widget_utils import WidgetUtils
+from src.utils.logger import get_logger
+from src.utils.error_handler import ErrorHandler
+from src.core.database import DatabaseManager
+from src.models.settings import Settings
+from src.models.user import User, UserRole
 import os
 import json
 
@@ -19,9 +19,11 @@ logger = get_logger(__name__)
 class InitWizard(QWizard):
     """初始化向导"""
     
-    def __init__(self, parent=None):
+    def __init__(self, db_manager: DatabaseManager, config_manager, auth_manager, parent=None):
         super().__init__(parent)
-        self.db_manager = DatabaseManager()
+        self.db_manager = db_manager
+        self.config_manager = config_manager
+        self.auth_manager = auth_manager
         self.init_ui()
         
     def init_ui(self):
@@ -217,10 +219,8 @@ class InitWizard(QWizard):
         layout.setSpacing(20)
         
         # 完成文本
-        finish_label = QLabel(
-            "系统初始化已完成。\n"
-            "请点击"完成"按钮保存配置并启动系统。"
-        )
+        text = "系统初始化已完成。\n请点击完成按钮保存配置并启动系统。"
+        finish_label = QLabel(text)
         finish_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(finish_label)
         
@@ -299,11 +299,16 @@ class InitWizard(QWizard):
         """保存配置"""
         try:
             # 保存企业信息
-            corp_info = CorpInfo(
-                corp_name=self.corp_name.text(),
-                corp_id=self.corp_id.text(),
-                corp_secret=self.corp_secret.text(),
-                agent_id=self.agent_id.text()
+            corp_settings = Settings(
+                name="corp_info",
+                type="json",
+                description="企业信息配置",
+                config={
+                    "corp_name": self.corp_name.text(),
+                    "corp_id": self.corp_id.text(),
+                    "corp_secret": self.corp_secret.text(),
+                    "agent_id": self.agent_id.text()
+                }
             )
             
             # 保存管理员账号
@@ -323,7 +328,7 @@ class InitWizard(QWizard):
             
             # 写入数据库
             with self.db_manager.get_session() as session:
-                session.add(corp_info)
+                session.add(corp_settings)
                 session.add(admin)
                 session.commit()
                 

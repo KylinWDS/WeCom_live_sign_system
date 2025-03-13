@@ -10,68 +10,17 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import json
 from src.utils.logger import get_logger
-from models.base import Base
-from models.user import User, UserRole
-from models.living import Living, WatchStat, SignRecord
-from models.live_booking import LiveBooking
-from models.live_viewer import LiveViewer
-from models.sign_record import SignRecord
-from sqlalchemy.ext.declarative import declarative_base
-from src.models.user import User as UserModel
-from src.models.living import Living as LivingModel
-from src.models.sign import Sign as SignModel
+from src.models.base import Base
+from src.models import User, UserRole
+from src.models.living import Living, WatchStat
+from src.models.live_booking import LiveBooking
+from src.models.live_viewer import LiveViewer
+from src.models.sign_record import SignRecord
+from src.models.sign import Sign
 from src.config.database import DB_CONFIG, MIGRATION_CONFIG
 from contextlib import contextmanager
 
 logger = get_logger(__name__)
-
-# 创建数据库引擎
-engine = create_engine("sqlite:///wecom_live_sign.db", echo=True)
-
-# 创建会话工厂
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# 创建基类
-Base = declarative_base()
-
-def init_db():
-    """初始化数据库"""
-    try:
-        # 创建所有表
-        Base.metadata.create_all(bind=engine)
-        
-        # 创建会话
-        db = SessionLocal()
-        
-        # 检查是否已存在超级管理员
-        admin = db.query(User).filter(User.role == UserRole.SUPER_ADMIN).first()
-        if not admin:
-            # 创建默认超级管理员
-            admin = User(
-                userid="admin",
-                name="系统管理员",
-                password="admin123",  # 实际应用中应该使用加密密码
-                role=UserRole.SUPER_ADMIN,
-                is_active=True
-            )
-            db.add(admin)
-            db.commit()
-            logger.info("创建默认超级管理员成功")
-        
-        db.close()
-        logger.info("数据库初始化成功")
-        
-    except Exception as e:
-        logger.error(f"数据库初始化失败: {str(e)}")
-        raise
-
-def get_db():
-    """获取数据库会话"""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 class DatabaseManager:
     """数据库管理器"""
@@ -91,6 +40,9 @@ class DatabaseManager:
     def init_db(self):
         """初始化数据库"""
         try:
+            # 删除所有表
+            Base.metadata.drop_all(bind=self.engine)
+            
             # 创建所有表
             Base.metadata.create_all(bind=self.engine)
             
@@ -111,21 +63,6 @@ class DatabaseManager:
                     session.add(root_admin)
                     session.commit()
                     logger.info("创建root-admin用户成功")
-                
-                # 检查是否已存在超级管理员
-                admin = session.query(User).filter(User.role == UserRole.SUPER_ADMIN).first()
-                if not admin:
-                    # 创建默认超级管理员
-                    admin = User(
-                        userid="admin",
-                        name="系统管理员",
-                        password="admin123",  # 实际应用中应该使用加密密码
-                        role=UserRole.SUPER_ADMIN,
-                        is_active=True
-                    )
-                    session.add(admin)
-                    session.commit()
-                    logger.info("创建默认超级管理员成功")
             
             logger.info("数据库初始化成功")
             
@@ -366,13 +303,13 @@ class DatabaseManager:
             logger.error(f"删除用户失败: {str(e)}")
             return False
     
-    def get_all_lives(self) -> List[LivingModel]:
+    def get_all_lives(self) -> List[Living]:
         """获取所有直播"""
         try:
             self.cursor.execute("SELECT * FROM livings ORDER BY created_at DESC")
             rows = self.cursor.fetchall()
             return [
-                LivingModel(
+                Living(
                     id=row[0],
                     name=row[1],
                     start_time=row[2],
@@ -387,13 +324,13 @@ class DatabaseManager:
             logger.error(f"获取直播列表失败: {str(e)}")
             raise
     
-    def get_all_signs(self) -> List[SignModel]:
+    def get_all_signs(self) -> List[Sign]:
         """获取所有签到记录"""
         try:
             self.cursor.execute("SELECT * FROM signs ORDER BY sign_time DESC")
             rows = self.cursor.fetchall()
             return [
-                SignModel(
+                Sign(
                     id=row[0],
                     user_id=row[1],
                     live_id=row[2],

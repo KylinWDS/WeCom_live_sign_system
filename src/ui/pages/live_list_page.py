@@ -9,17 +9,16 @@ from PySide6.QtCore import Qt, QDateTime
 from PySide6.QtGui import QIcon
 from ..managers.style import StyleManager
 from ..utils.widget_utils import WidgetUtils
-from utils.logger import get_logger
-from ..managers.animation import AnimationManager
-from utils.performance_manager import PerformanceManager
-from utils.error_handler import ErrorHandler
-from models.live_booking import LiveBooking
-from core.database import DatabaseManager
-from core.wecom_api import WeComAPI
-from core.network_manager import NetworkManager
-from models.live import LiveSession
+from src.utils.logger import get_logger
+from src.ui.managers.animation import AnimationManager
+from src.utils.performance_manager import PerformanceManager
+from src.utils.error_handler import ErrorHandler
+from src.models.live_booking import LiveBooking
+from src.core.database import DatabaseManager
+from src.api.wecom import WeComAPI
+from src.models.live import Live
 from datetime import datetime
-from ..dialogs.io_dialog import IODialog
+from src.ui.components.dialogs.io_dialog import IODialog
 import pandas as pd
 import os
 
@@ -32,7 +31,6 @@ class LiveListPage(QWidget):
         super().__init__()
         self.db_manager = db_manager
         self.wecom_api = wecom_api
-        self.network_manager = NetworkManager()
         self.performance_manager = PerformanceManager()
         self.error_handler = ErrorHandler()
         self.init_ui()
@@ -145,11 +143,11 @@ class LiveListPage(QWidget):
         try:
             # 获取直播列表
             with self.db_manager.get_session() as session:
-                query = session.query(LiveSession)
+                query = session.query(Live)
                 
                 # 应用搜索条件
                 if self.live_title.text():
-                    query = query.filter(LiveSession.title.like(f"%{self.live_title.text()}%"))
+                    query = query.filter(Live.title.like(f"%{self.live_title.text()}%"))
                     
                 if self.live_status.currentText() != "全部":
                     status_map = {
@@ -237,99 +235,8 @@ class LiveListPage(QWidget):
             self.current_page += 1
             self.load_data()
             
-    @PerformanceManager.measure_operation("sync_live_list")
-    def sync_live_list(self):
-        """同步直播列表"""
-        try:
-            # 获取用户ID
-            user_id = self._get_user_id()
-            if not user_id:
-                return
-                
-            # 获取直播列表
-            response = self.network_manager.post(
-                "https://qyapi.weixin.qq.com/cgi-bin/living/get_user_all_livingid",
-                json={
-                    "userid": user_id,
-                    "cursor": "",
-                    "limit": 100
-                }
-            )
-            
-            if response.get("errcode") == 0:
-                # 获取直播详情
-                for living_id in response["livingid_list"]:
-                    self._sync_live_detail(living_id)
-                    
-                ErrorHandler.handle_info("同步直播列表成功", self, "成功")
-                self.load_data()
-                
-            else:
-                ErrorHandler.handle_warning(
-                    f"同步直播列表失败：{response.get('errmsg')}",
-                    self,
-                    "失败"
-                )
-                
-        except Exception as e:
-            ErrorHandler.handle_error(e, self, "同步直播列表失败")
-            
-    def _get_user_id(self) -> str:
-        """获取用户ID"""
-        try:
-            with self.db_manager.get_session() as session:
-                user = session.query(User).first()
-                if user:
-                    return user.user_id
-                    
-            ErrorHandler.handle_warning("未找到用户信息", self)
-            return None
-            
-        except Exception as e:
-            ErrorHandler.handle_error(e, self, "获取用户ID失败")
-            return None
-            
-    def _sync_live_detail(self, living_id: str):
-        """同步直播详情
-        
-        Args:
-            living_id: 直播ID
-        """
-        try:
-            # 获取直播详情
-            response = self.network_manager.get(
-                "https://qyapi.weixin.qq.com/cgi-bin/living/get_living_info",
-                params={"livingid": living_id}
-            )
-            
-            if response.get("errcode") == 0:
-                # 更新直播信息
-                live_info = response["living_info"]
-                with self.db_manager.get_session() as session:
-                    live = session.query(LiveSession).filter_by(live_session=living_id).first()
-                    if not live:
-                        live = LiveSession(
-                            live_session=living_id,
-                            start_time=QDateTime.fromSecsSinceEpoch(live_info["living_start"]),
-                            end_time=QDateTime.fromSecsSinceEpoch(
-                                live_info["living_start"] + live_info["living_duration"]
-                            ),
-                            anchor=live_info["anchor_userid"],
-                            status=live_info["status"]
-                        )
-                        session.add(live)
-                    else:
-                        live.viewer_num = live_info["viewer_num"]
-                        live.comment_num = live_info["comment_num"]
-                        live.mic_num = live_info["mic_num"]
-                        live.status = live_info["status"]
-                    session.commit()
-                    
-        except Exception as e:
-            ErrorHandler.handle_error(e, self, f"同步直播详情失败：{living_id}")
-            
     @PerformanceManager.measure_operation("view_details")
-    def view_details(self, live: LiveSession):
+    def view_details(self, live: Live):
         """查看直播详情
         
         Args:
@@ -367,7 +274,7 @@ class LiveListPage(QWidget):
             ErrorHandler.handle_error(e, self, "查看直播详情失败")
             
     @PerformanceManager.measure_operation("import_sign")
-    def import_sign(self, live: LiveSession):
+    def import_sign(self, live: Live):
         """导入签到信息
         
         Args:
@@ -411,7 +318,7 @@ class LiveListPage(QWidget):
             ErrorHandler.handle_error(e, self, "导入签到信息失败")
             
     @PerformanceManager.measure_operation("cancel_live")
-    def cancel_live(self, live: LiveSession):
+    def cancel_live(self, live: Live):
         """取消直播
         
         Args:
@@ -467,7 +374,7 @@ class LiveListPage(QWidget):
                 
             # 获取所有直播记录
             with self.db_manager.get_session() as session:
-                records = session.query(LiveSession).all()
+                records = session.query(Live).all()
                 
             # 创建DataFrame
             data = []

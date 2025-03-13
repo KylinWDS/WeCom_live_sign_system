@@ -1,16 +1,18 @@
 # PySide6导入
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFileDialog
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFileDialog, QLineEdit, QComboBox, QCheckBox
+from PySide6.QtCore import Qt
+from typing import Dict, Any, List
 
 # UI相关导入
-from .base_dialog import BaseDialog
-from ..managers.style import StyleManager
-from ..utils.widget_utils import WidgetUtils
+from src.ui.managers.style import StyleManager
+from src.ui.utils.widget_utils import WidgetUtils
+from src.ui.components.dialogs.base_dialog import BaseDialog
 
 # 核心功能导入
-from core.database import DatabaseManager
+from src.core.database import DatabaseManager
 
 # 工具类导入
-from utils.logger import get_logger
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

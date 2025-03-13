@@ -16,14 +16,14 @@ from ..pages.live_list_page import LiveListPage
 from ..pages.user_management_page import UserManagementPage
 
 # 核心功能导入
-from core.database import DatabaseManager
-from core.user import UserRole
-from core.wecom_api import WeComAPI
-from core.task_manager import TaskManager
-from core.auth_manager import AuthManager
+from src.core.database import DatabaseManager
+from src.models.user import UserRole
+from src.api.wecom import WeComAPI
+from src.core.task_manager import TaskManager
+from src.core.auth_manager import AuthManager
 
 # 工具类导入
-from utils.logger import get_logger
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt
-from src.utils.logger import get_logger
+from src.utils.logger_utils import get_logger
 
 logger = get_logger(__name__)
 

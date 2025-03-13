@@ -22,7 +22,7 @@ from src.utils.performance_manager import PerformanceManager
 from src.utils.error_handler import ErrorHandler
 from src.core.database import DatabaseManager
 from src.core.network_manager import NetworkManager
-from src.models.live import LiveSession
+from src.models.live import Live
 
 logger = get_logger(__name__)
 
@@ -154,11 +154,11 @@ class LivePage(QWidget):
         try:
             # 获取直播列表
             with self.db_manager.get_session() as session:
-                query = session.query(LiveSession)
+                query = session.query(Live)
                 
                 # 应用搜索条件
                 if self.live_title.text():
-                    query = query.filter(LiveSession.title.like(f"%{self.live_title.text()}%"))
+                    query = query.filter(Live.title.like(f"%{self.live_title.text()}%"))
                     
                 if self.live_status.currentText() != "全部":
                     status_map = {
@@ -246,7 +246,7 @@ class LivePage(QWidget):
                 if response.get("errcode") == 0:
                     # 保存直播信息
                     with self.db_manager.get_session() as session:
-                        live = LiveSession(
+                        live = Live(
                             live_session=response["livingid"],
                             start_time=QDateTime.fromSecsSinceEpoch(live_info["living_start"]),
                             end_time=QDateTime.fromSecsSinceEpoch(
@@ -272,7 +272,7 @@ class LivePage(QWidget):
             ErrorHandler.handle_error(e, self, "创建直播失败")
             
     @PerformanceManager.measure_operation("view_details")
-    def view_details(self, live: LiveSession):
+    def view_details(self, live: Live):
         """查看直播详情
         
         Args:
@@ -309,7 +309,7 @@ class LivePage(QWidget):
             ErrorHandler.handle_error(e, self, "查看直播详情失败")
             
     @PerformanceManager.measure_operation("cancel_live")
-    def cancel_live(self, live: LiveSession):
+    def cancel_live(self, live: Live):
         """取消直播
         
         Args:
@@ -365,7 +365,7 @@ class LivePage(QWidget):
                 
             # 获取所有直播记录
             with self.db_manager.get_session() as session:
-                records = session.query(LiveSession).all()
+                records = session.query(Live).all()
                 
             # 创建DataFrame
             data = []

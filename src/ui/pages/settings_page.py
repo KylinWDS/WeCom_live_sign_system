@@ -1,20 +1,20 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QLabel, QLineEdit, QTableWidget, QTableWidgetItem,
                              QMessageBox, QComboBox, QDialog, QFormLayout,
-                             QHeaderView, QFileDialog, QGroupBox)
+                             QHeaderView, QFileDialog, QGroupBox, QCheckBox, QSpinBox)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from ..managers.style import StyleManager
 from ..utils.widget_utils import WidgetUtils
-from utils.logger import get_logger
+from src.utils.logger import get_logger
 from ..managers.animation import AnimationManager
-from utils.performance_manager import PerformanceManager
-from utils.error_handler import ErrorHandler
-from core.auth_manager import AuthManager
-from core.database import DatabaseManager
-from core.user import UserRole
-from models.settings import Settings
-from ..dialogs.io_dialog import IODialog
+from src.utils.performance_manager import PerformanceManager
+from src.utils.error_handler import ErrorHandler
+from src.core.auth_manager import AuthManager
+from src.core.database import DatabaseManager
+from src.models.user import UserRole
+from src.models.settings import Settings
+from ..components.dialogs.io_dialog import IODialog
 import pandas as pd
 import os
 

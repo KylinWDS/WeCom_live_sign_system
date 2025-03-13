@@ -6,13 +6,13 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from ..managers.style import StyleManager
 from ..utils.widget_utils import WidgetUtils
-from core.auth_manager import AuthManager
-from utils.logger import get_logger
+from src.core.auth_manager import AuthManager
+from src.utils.logger import get_logger
 from ..managers.animation import AnimationManager
-from utils.performance_manager import PerformanceManager
-from utils.error_handler import ErrorHandler
-from core.database import DatabaseManager
-from models.user import User
+from src.utils.performance_manager import PerformanceManager
+from src.utils.error_handler import ErrorHandler
+from src.core.database import DatabaseManager
+from src.models.user import User
 import pandas as pd
 import os
 
