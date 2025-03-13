@@ -4,8 +4,9 @@ import traceback
 import logging
 import sys
 from datetime import datetime
-from PySide6.QtWidgets import QMessageBox, QWidget, QApplication, QDesktopServices
+from PySide6.QtWidgets import QMessageBox, QWidget, QApplication
 from PySide6.QtCore import QUrl, QObject, Signal
+from PySide6.QtGui import QDesktopServices
 from src.utils.logger import get_logger
 from src.utils.network import NetworkUtils
 from src.core.database import DatabaseManager
@@ -437,34 +438,36 @@ class ErrorHandler(QObject):
             ip_record_manager.add_ip(ip, 'error')
         
         if ip:
-            message = (
-                f"检测到IP限制错误，您的IP地址为：{ip}\n\n"
-                "请在企业微信后台配置可信任IP：\n"
-                "1. 访问 https://work.weixin.qq.com/wework_admin/frame#apps/modApiApp\n"
-                "2. 选择对应的应用\n"
-                "3. 在"开发者接口"部分找到"IP白名单"\n"
-                "4. 添加上述IP地址\n\n"
-                "配置完成后，请等待5分钟后再试。\n\n"
-                "注意：\n"
-                "- 如果您的IP是动态的，建议使用IP段配置\n"
-                "- 最多可配置120个IP地址\n"
-                "- 配置后需要等待5-10分钟生效\n"
-                "- 如果仍然无法访问，请检查IP是否正确"
-            )
+            message = f"""检测到IP限制错误，您的IP地址为：{ip}
+
+请在企业微信后台配置可信任IP：
+1. 访问 https://work.weixin.qq.com/wework_admin/frame#apps/modApiApp
+2. 选择对应的应用
+3. 在"开发者接口"部分找到"IP白名单"
+4. 添加上述IP地址
+
+配置完成后，请等待5分钟后再试。
+
+注意：
+- 如果您的IP是动态的，建议使用IP段配置
+- 最多可配置120个IP地址
+- 配置后需要等待5-10分钟生效
+- 如果仍然无法访问，请检查IP是否正确"""
         else:
-            message = (
-                "检测到IP限制错误，但无法获取IP地址。\n\n"
-                "请在企业微信后台检查IP白名单配置：\n"
-                "https://work.weixin.qq.com/wework_admin/frame#apps/modApiApp\n\n"
-                "配置步骤：\n"
-                "1. 访问上述链接\n"
-                "2. 选择对应的应用\n"
-                "3. 在"开发者接口"部分找到"IP白名单"\n"
-                "4. 添加您的服务器IP地址\n\n"
-                "注意：\n"
-                "- 最多可配置120个IP地址\n"
-                "- 配置后需要等待5-10分钟生效"
-            )
+            message = """检测到IP限制错误，但无法获取IP地址。
+
+请在企业微信后台检查IP白名单配置：
+https://work.weixin.qq.com/wework_admin/frame#apps/modApiApp
+
+配置步骤：
+1. 访问上述链接
+2. 选择对应的应用
+3. 在"开发者接口"部分找到"IP白名单"
+4. 添加您的服务器IP地址
+
+注意：
+- 最多可配置120个IP地址
+- 配置后需要等待5-10分钟生效"""
         
         # 创建自定义对话框
         dialog = QMessageBox(parent)

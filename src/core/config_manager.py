@@ -4,7 +4,7 @@ import shutil
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional
-from src.utils.logger import get_logger
+from src.utils.logger_utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -15,11 +15,14 @@ class ConfigManager:
         self.config_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign")
         self.config_file = os.path.join(self.config_dir, "config.json")
         self.backup_dir = os.path.join(self.config_dir, "backups")
-        self.config = self._load_config()
+        self.config = self._load_config() or self._get_default_config()
+        
+        logger.info("初始化ConfigManager...")
         
     def _load_config(self) -> Dict[str, Any]:
         """加载配置文件"""
         try:
+            logger.info("加载配置文件...")
             # 创建配置目录
             if not os.path.exists(self.config_dir):
                 os.makedirs(self.config_dir)
@@ -28,6 +31,7 @@ class ConfigManager:
             if not os.path.exists(self.config_file):
                 default_config = self._get_default_config()
                 self._save_config(default_config)
+                logger.info("配置文件加载成功")
                 return default_config
                 
             # 读取配置文件
@@ -40,10 +44,12 @@ class ConfigManager:
             
             # 保存合并后的配置
             self._save_config(merged_config)
-            return merged_config
+            logger.info("配置文件加载成功")
+            return merged_config if merged_config else self._get_default_config()
             
         except Exception as e:
             logger.error(f"加载配置文件失败: {str(e)}")
+            logger.error("加载配置文件失败，使用默认配置")
             return self._get_default_config()
             
     def _save_config(self, config: Dict[str, Any]) -> bool:
@@ -59,6 +65,7 @@ class ConfigManager:
             # 清理旧备份
             self._cleanup_backups()
             
+            logger.info("ConfigManager初始化完成，配置已加载")
             return True
             
         except Exception as e:
@@ -93,6 +100,10 @@ class ConfigManager:
     def _cleanup_backups(self) -> bool:
         """清理旧备份"""
         try:
+            if not hasattr(self, 'config') or self.config is None:
+                logger.error("配置未初始化，无法清理备份")
+                return False
+            
             # 获取备份保留天数
             retention_days = self.config.get("system", {}).get("backup_retention", 30)
             

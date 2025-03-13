@@ -55,7 +55,6 @@ class LiveBooking(BaseModel):
     
     # 关联
     viewers = relationship("LiveViewer", back_populates="live_booking", lazy="dynamic", cascade="all, delete-orphan")
-    sign_records = relationship("SignRecord", back_populates="live_booking", lazy="dynamic", cascade="all, delete-orphan")
     
     def to_dict(self) -> dict:
         """转换为字典"""
@@ -129,4 +128,4 @@ class LiveBooking(BaseModel):
             
         except Exception as e:
             logger.error(f"更新直播信息失败: {str(e)}")
-            raise 
+            raise

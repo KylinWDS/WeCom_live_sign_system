@@ -2,8 +2,8 @@ from PySide6.QtWidgets import QComboBox, QProgressBar, QMessageBox
 from PySide6.QtCore import Qt
 from src.core.export_manager import ExportManager
 from src.utils.logger import get_logger
-from .io_dialog import IODialog
-from .data_dialog import DataDialog
+from src.ui.components.dialogs.io_dialog import IODialog
+from src.ui.components.dialogs.data_dialog import DataDialog
 
 logger = get_logger(__name__)
 

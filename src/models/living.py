@@ -4,6 +4,7 @@ from .base import BaseModel
 import enum
 from datetime import datetime
 from typing import Optional
+from .sign_record import SignRecord
 
 class LivingStatus(enum.Enum):
     """直播状态"""
@@ -123,19 +124,4 @@ class WatchStat(BaseModel):
     device_info = Column(JSON, nullable=True, comment="设备信息")
     
     # 关联
-    living = relationship("Living", back_populates="watch_stats")
-
-class SignRecord(BaseModel):
-    """签到记录模型"""
-    __tablename__ = "sign_records"
-    
-    living_id = Column(Integer, ForeignKey("livings.id"), nullable=False)
-    userid = Column(String(50), nullable=False, comment="用户ID")
-    name = Column(String(50), nullable=False, comment="用户名称")
-    sign_time = Column(DateTime, nullable=False, comment="签到时间")
-    sign_type = Column(Integer, default=1, comment="签到类型：1-正常签到，2-补签")
-    answer_content = Column(Text, nullable=True, comment="签到答题内容")
-    invite_code = Column(String(50), nullable=True, comment="签到邀请码")
-    
-    # 关联
-    living = relationship("Living", back_populates="sign_records") 
+    living = relationship("Living", back_populates="watch_stats") 

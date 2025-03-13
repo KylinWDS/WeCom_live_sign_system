@@ -4,15 +4,15 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QHeaderView, QFileDialog, QGroupBox)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
-from ..managers.style import StyleManager
-from ..utils.widget_utils import WidgetUtils
-from utils.logger import get_logger
-from ..managers.animation import AnimationManager
-from utils.performance_manager import PerformanceManager
-from utils.error_handler import ErrorHandler
-from core.database import DatabaseManager
-from models.live import LiveInfo
-from ..dialogs.io_dialog import IODialog
+from src.ui.managers.style import StyleManager
+from src.ui.utils.widget_utils import WidgetUtils
+from src.utils.logger import get_logger
+from src.ui.managers.animation import AnimationManager
+from src.utils.performance_manager import PerformanceManager
+from src.utils.error_handler import ErrorHandler
+from src.core.database import DatabaseManager
+from src.models.live import Live
+from src.ui.components.dialogs.io_dialog import IODialog
 import pandas as pd
 import os
 

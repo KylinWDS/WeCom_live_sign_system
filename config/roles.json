@@ -1,0 +1,24 @@
+{
+  "super_admin": {
+    "name": "超级管理员",
+    "permissions": [
+      "*"
+    ]
+  },
+  "wecom_admin": {
+    "name": "企业微信管理员",
+    "permissions": [
+      "manage_live",
+      "view_live",
+      "manage_users",
+      "view_stats"
+    ]
+  },
+  "normal_user": {
+    "name": "普通用户",
+    "permissions": [
+      "view_live",
+      "view_stats"
+    ]
+  }
+}

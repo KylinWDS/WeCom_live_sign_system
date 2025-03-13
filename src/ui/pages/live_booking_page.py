@@ -7,16 +7,16 @@ from PySide6.QtCore import Qt, QDateTime
 from PySide6.QtGui import QIcon
 from ..managers.style import StyleManager
 from ..utils.widget_utils import WidgetUtils
-from utils.logger import get_logger
-from ..managers.animation import AnimationManager
-from utils.performance_manager import PerformanceManager
-from utils.error_handler import ErrorHandler
-from models.live_booking import LiveBooking
-from core.database import DatabaseManager
-from core.wecom_api import WeComAPI
-from core.task_manager import TaskManager
+from src.utils.logger import get_logger
+from src.ui.managers.animation import AnimationManager
+from src.utils.performance_manager import PerformanceManager
+from src.utils.error_handler import ErrorHandler
+from src.models.live_booking import LiveBooking
+from src.core.database import DatabaseManager
+from src.api.wecom import WeComAPI
+from src.core.task_manager import TaskManager
 from datetime import datetime
-from ..dialogs.io_dialog import IODialog
+from src.ui.components.dialogs.io_dialog import IODialog
 import pandas as pd
 import os
 
