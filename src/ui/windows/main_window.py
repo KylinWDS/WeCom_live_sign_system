@@ -170,7 +170,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "关于",
-            "企业微信直播签到系统 v1.0.0\n\n"
+            "企业微信直播签到系统 v0.0.1\n\n"
             "用于管理企业微信直播和签到信息的系统。"
         )
         
