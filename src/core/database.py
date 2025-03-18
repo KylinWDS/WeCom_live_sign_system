@@ -2,7 +2,7 @@ import sqlite3
 import os
 import shutil
 from sqlalchemy import create_engine, func
-from sqlalchemy.orm import sessionmaker, scoped_session
+from sqlalchemy.orm import sessionmaker, scoped_session, Session
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional, List, Dict, Any
@@ -17,57 +17,214 @@ from src.models.live_booking import LiveBooking
 from src.models.live_viewer import LiveViewer
 from src.models.sign_record import SignRecord
 from src.models.sign import Sign
-from src.config.database import DB_CONFIG, MIGRATION_CONFIG
 from contextlib import contextmanager
+from src.config.database import get_default_paths
+from sqlalchemy import inspect
 
 logger = get_logger(__name__)
+
+def get_db_connection_config() -> Dict[str, Any]:
+    """获取数据库连接参数配置
+    注意：不包含路径配置，路径配置由配置管理器提供
+    """
+    return {
+        "type": "sqlite",
+        "pool_size": 5,
+        "timeout": 30,
+        "echo": False,
+        "pool_recycle": 3600,
+        "pool_pre_ping": True
+    }
 
 class DatabaseManager:
     """数据库管理器"""
     
     def __init__(self):
-        """初始化数据库管理器"""
-        self.engine = create_engine(
-            f"sqlite:///{DB_CONFIG['db_path']}",
-            poolclass=QueuePool,
-            pool_size=DB_CONFIG['max_connections'],
-            pool_recycle=DB_CONFIG['pool_recycle'],
-            echo=DB_CONFIG['echo']
-        )
-        self.Session = scoped_session(sessionmaker(bind=self.engine))
-        self.init_db()
-    
-    def init_db(self):
-        """初始化数据库"""
+        self.engine = None
+        self.Session = None
+        self.initialized = False
+        self.db_config = None
+        
+    def initialize(self, db_config: Dict[str, Any]) -> bool:
+        """初始化数据库
+        
+        Args:
+            db_config: 数据库配置
+            
+        Returns:
+            bool: 是否初始化成功
+        """
         try:
-            # 删除所有表
-            Base.metadata.drop_all(bind=self.engine)
+            # 合并默认配置和用户配置
+            default_config = get_db_connection_config()
+            self.db_config = {**default_config, **db_config}  # 用户配置会覆盖默认配置
             
-            # 创建所有表
-            Base.metadata.create_all(bind=self.engine)
+            # 获取数据库路径
+            db_path = self.db_config.get("path")
+            if not db_path:
+                logger.error("数据库路径未配置")
+                return False
+                
+            logger.info(f"数据库路径: {db_path}")
             
-            # 创建会话
-            with self.get_session() as session:
+            # 确保数据库目录存在
+            db_dir = os.path.dirname(db_path)
+            if not os.path.exists(db_dir):
+                logger.info(f"创建数据库目录: {db_dir}")
+                os.makedirs(db_dir, exist_ok=True)
+            
+            # 确保备份路径存在于配置中
+            backup_path = self.db_config.get("backup_path")
+            if not backup_path:
+                logger.error("备份路径未配置")
+                return False
+                
+            logger.info(f"备份路径: {backup_path}")
+            
+            # 确保备份目录存在
+            if not os.path.exists(backup_path):
+                logger.info(f"创建备份目录: {backup_path}")
+                os.makedirs(backup_path, exist_ok=True)
+            
+            # 创建数据库引擎
+            logger.info("创建数据库引擎...")
+            self.engine = create_engine(
+                f"sqlite:///{db_path}",
+                poolclass=QueuePool,
+                pool_size=self.db_config.get("pool_size", 5),
+                pool_recycle=self.db_config.get("pool_recycle", 3600),
+                pool_timeout=self.db_config.get("timeout", 30),
+                echo=self.db_config.get("echo", False)
+            )
+            
+            # 创建会话工厂
+            logger.info("创建会话工厂...")
+            self.Session = scoped_session(sessionmaker(bind=self.engine))
+            
+            # 标记为已初始化
+            self.initialized = True
+            logger.info(f"数据库管理器初始化成功: {db_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"初始化数据库失败: {str(e)}")
+            return False
+            
+    def create_tables(self) -> bool:
+        """创建数据库表"""
+        if not self.initialized:
+            logger.error("数据库未初始化")
+            return False
+            
+        try:
+            logger.info("开始创建数据库表...")
+            # 导入所有模型类，确保它们被注册到Base.metadata中
+            from src.models.user import User, UserRole
+            from src.models.living import Living, WatchStat
+            from src.models.live_booking import LiveBooking
+            from src.models.live_viewer import LiveViewer
+            from src.models.sign_record import SignRecord
+            from src.models.sign import Sign
+            
+            # 获取所有要创建的表
+            tables = Base.metadata.tables
+            logger.info(f"需要创建的表: {', '.join(tables.keys())}")
+            
+            # 创建表
+            Base.metadata.create_all(self.engine)
+            
+            # 验证表是否创建成功
+            inspector = inspect(self.engine)
+            created_tables = inspector.get_table_names()
+            logger.info(f"已创建的表: {', '.join(created_tables)}")
+            
+            if set(tables.keys()) <= set(created_tables):
+                logger.info("数据库表创建成功")
+                return True
+            else:
+                missing_tables = set(tables.keys()) - set(created_tables)
+                logger.error(f"部分表未创建成功: {', '.join(missing_tables)}")
+                return False
+            
+        except Exception as e:
+            logger.error(f"创建数据库表失败: {str(e)}")
+            return False
+            
+    def get_session(self) -> Session:
+        """获取数据库会话
+        
+        Returns:
+            Session: 数据库会话
+        """
+        if not self.initialized:
+            raise RuntimeError("数据库未初始化")
+            
+        return self.Session()
+        
+    def close(self):
+        """关闭数据库连接"""
+        if self.Session:
+            self.Session.remove()
+        if self.engine:
+            self.engine.dispose()
+    
+    def init_db(self, force_recreate: bool = False):
+        """初始化数据库
+        
+        Args:
+            force_recreate: 是否强制重建表，默认为False。
+                          首次运行时应该设置为True以确保表结构正确。
+        """
+        try:
+            # 导入所有模型类，确保它们被注册到Base.metadata中
+            from src.models.user import User, UserRole
+            from src.models.living import Living, WatchStat
+            from src.models.live_booking import LiveBooking
+            from src.models.live_viewer import LiveViewer
+            from src.models.sign_record import SignRecord
+            from src.models.sign import Sign
+            
+            if force_recreate:
+                # 删除所有表
+                logger.info("正在重建数据库表...")
+                Base.metadata.drop_all(bind=self.engine)
+                Base.metadata.create_all(bind=self.engine)
+            else:
+                # 仅创建不存在的表
+                logger.info("正在检查并创建缺失的数据库表...")
+                Base.metadata.create_all(bind=self.engine)
+            
+            # 创建默认的root-admin用户
+            session = self.Session()
+            try:
                 # 检查是否已存在root-admin用户
-                root_admin = session.query(User).filter(User.userid == "root-admin").first()
-                if not root_admin:
+                existing_user = session.query(User).filter_by(login_name="root-admin").first()
+                if not existing_user:
                     # 创建root-admin用户
                     root_admin = User(
-                        userid="root-admin",
-                        name="系统超级管理员",
-                        role=UserRole.ROOT_ADMIN,
+                        login_name="root-admin",
+                        name="超级管理员",
+                        role=UserRole.ROOT_ADMIN.value,  # 使用枚举值的字符串表示
                         is_active=True,
-                        # 初始密码为空，需要首次登录时设置
-                        password_hash=None
+                        is_admin=True,  # 设置为管理员
+                        password_hash=None,  # 初始密码为空，等待配置向导设置
+                        salt=None,  # 初始盐值为空，等待配置向导设置
+                        created_at=datetime.now(),
+                        updated_at=datetime.now()
                     )
                     session.add(root_admin)
                     session.commit()
-                    logger.info("创建root-admin用户成功")
+                    logger.info("创建默认root-admin用户成功")
+            except Exception as e:
+                session.rollback()
+                raise
+            finally:
+                session.close()
             
             logger.info("数据库初始化成功")
             
         except Exception as e:
-            logger.error(f"数据库初始化失败: {str(e)}")
+            logger.error(f"初始化数据库失败: {str(e)}")
             raise
     
     @contextmanager
@@ -93,7 +250,7 @@ class DatabaseManager:
             # 生成备份文件名
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_file = os.path.join(
-                DB_CONFIG['backup_path'],
+                self.db_config['backup_path'],
                 f"backup_{timestamp}.db"
             )
             
@@ -101,7 +258,7 @@ class DatabaseManager:
             self.engine.dispose()
             
             # 复制数据库文件
-            shutil.copy2(DB_CONFIG['db_path'], backup_file)
+            shutil.copy2(self.db_config['db_path'], backup_file)
             
             logger.info(f"数据库备份成功: {backup_file}")
             return backup_file
@@ -128,7 +285,7 @@ class DatabaseManager:
             self.engine.dispose()
             
             # 复制备份文件到数据库位置
-            shutil.copy2(backup_file, DB_CONFIG['db_path'])
+            shutil.copy2(backup_file, self.db_config['db_path'])
             
             logger.info(f"数据库恢复成功: {backup_file}")
             return True
@@ -145,9 +302,9 @@ class DatabaseManager:
         """
         try:
             backups = []
-            for file in os.listdir(DB_CONFIG['backup_path']):
+            for file in os.listdir(self.db_config['backup_path']):
                 if file.endswith('.db'):
-                    file_path = os.path.join(DB_CONFIG['backup_path'], file)
+                    file_path = os.path.join(self.db_config['backup_path'], file)
                     backups.append({
                         'name': file,
                         'path': file_path,
@@ -199,19 +356,19 @@ class DatabaseManager:
             self.engine.dispose()
             
             # 如果新路径与原路径不同,复制数据库文件
-            if new_path != DB_CONFIG['db_path']:
-                shutil.copy2(DB_CONFIG['db_path'], new_path)
+            if new_path != self.db_config['db_path']:
+                shutil.copy2(self.db_config['db_path'], new_path)
             
             # 更新配置
-            DB_CONFIG['db_path'] = new_path
+            self.db_config['db_path'] = new_path
             
             # 重新创建引擎
             self.engine = create_engine(
                 f"sqlite:///{new_path}",
                 poolclass=QueuePool,
-                pool_size=DB_CONFIG['max_connections'],
-                pool_recycle=DB_CONFIG['pool_recycle'],
-                echo=DB_CONFIG['echo']
+                pool_size=self.db_config['max_connections'],
+                pool_recycle=self.db_config['pool_recycle'],
+                echo=self.db_config['echo']
             )
             self.Session = scoped_session(sessionmaker(bind=self.engine))
             
@@ -226,7 +383,7 @@ class DatabaseManager:
         """执行SQL语句"""
         try:
             # 创建数据库连接
-            conn = sqlite3.connect(self.db_file)
+            conn = sqlite3.connect(self.db_config['db_path'])
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
@@ -254,7 +411,7 @@ class DatabaseManager:
     def get_user(self, username: str) -> Optional[Dict[str, Any]]:
         """获取用户信息"""
         try:
-            sql = "SELECT * FROM users WHERE username = ?"
+            sql = "SELECT * FROM users WHERE login_name = ?"
             result = self.execute(sql, (username,))
             return result[0] if result else None
             
@@ -266,10 +423,10 @@ class DatabaseManager:
         """创建用户"""
         try:
             sql = """
-                INSERT INTO users (username, password, salt, role, created_at)
-                VALUES (?, ?, ?, ?, datetime('now'))
+                INSERT INTO users (login_name, name, password_hash, salt, role, created_at)
+                VALUES (?, ?, ?, ?, ?, datetime('now'))
             """
-            self.execute(sql, (username, password, salt, role))
+            self.execute(sql, (username, username, password, salt, role))
             return True
             
         except Exception as e:
@@ -281,7 +438,7 @@ class DatabaseManager:
         try:
             # 构建更新语句
             set_clause = ", ".join([f"{k} = ?" for k in kwargs.keys()])
-            sql = f"UPDATE users SET {set_clause}, updated_at = datetime('now') WHERE username = ?"
+            sql = f"UPDATE users SET {set_clause}, updated_at = datetime('now') WHERE login_name = ?"
             
             # 执行更新
             params = list(kwargs.values()) + [username]
@@ -295,7 +452,7 @@ class DatabaseManager:
     def delete_user(self, username: str) -> bool:
         """删除用户"""
         try:
-            sql = "DELETE FROM users WHERE username = ?"
+            sql = "DELETE FROM users WHERE login_name = ?"
             self.execute(sql, (username,))
             return True
             
@@ -461,3 +618,36 @@ class DatabaseManager:
             return []
         finally:
             session.close() 
+    
+    def query_one(self, sql: str, params: tuple = None) -> Optional[tuple]:
+        """执行SQL查询并返回第一条记录
+        
+        Args:
+            sql: SQL语句
+            params: 查询参数
+            
+        Returns:
+            Optional[tuple]: 查询结果
+        """
+        try:
+            # 创建数据库连接
+            conn = sqlite3.connect(self.db_config["path"])
+            cursor = conn.cursor()
+            
+            # 执行SQL语句
+            if params:
+                cursor.execute(sql, params)
+            else:
+                cursor.execute(sql)
+            
+            # 获取结果
+            result = cursor.fetchone()
+            
+            # 关闭连接
+            conn.close()
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"执行SQL查询失败: {str(e)}")
+            raise

@@ -78,17 +78,15 @@ class SettingsPage(QWidget):
                 return
                 
             # 超级管理员可以访问所有设置
-            if current_user.role == UserRole.ROOT_ADMIN:
-                return
-                
-            # 企业管理员可以访问企业信息和用户管理设置
-            if current_user.role == UserRole.CORP_ADMIN:
-                # 禁用系统设置和数据管理
+            if current_user.role == UserRole.ROOT_ADMIN.value:
+                pass
+            elif current_user.role == UserRole.WECOM_ADMIN.value:
+                # 企业微信管理员只能访问部分设置
                 self.system_group.setEnabled(False)
                 self.data_group.setEnabled(False)
                 
             # 普通用户只能查看企业信息
-            if current_user.role == UserRole.USER:
+            if current_user.role == UserRole.NORMAL.value:
                 # 禁用所有设置组
                 self.corp_group.setEnabled(False)
                 self.user_group.setEnabled(False)
@@ -321,9 +319,9 @@ class SettingsPage(QWidget):
                     
                     # 用户管理
                     self.default_role.setCurrentText({
-                        "root-admin": "超级管理员",
-                        "corp-admin": "企业管理员",
-                        "user": "普通用户"
+                        "超级管理员": "超级管理员",
+                        "企业管理员": "企业管理员",
+                        "普通用户": "普通用户"
                     }.get(settings.default_role, "普通用户"))
                     self.user_status.setChecked(settings.user_status)
                     self.password_policy.setCurrentText({
@@ -381,9 +379,9 @@ class SettingsPage(QWidget):
                 
                 # 用户管理
                 settings.default_role = {
-                    "超级管理员": "root-admin",
-                    "企业管理员": "corp-admin",
-                    "普通用户": "user"
+                    "超级管理员": UserRole.ROOT_ADMIN.value,
+                    "企业管理员": UserRole.WECOM_ADMIN.value,
+                    "普通用户": UserRole.NORMAL.value
                 }[self.default_role.currentText()]
                 settings.user_status = self.user_status.isChecked()
                 settings.password_policy = {

@@ -330,6 +330,62 @@ class StyleManager:
         """
     
     @staticmethod
+    def get_login_style() -> str:
+        """获取登录窗口样式
+        
+        Returns:
+            str: 样式表
+        """
+        return """
+            QMainWindow {
+                background-color: #ffffff;
+            }
+            QLabel {
+                font-size: 14px;
+                color: #333333;
+            }
+            QLineEdit {
+                padding: 8px;
+                border: 1px solid #d9d9d9;
+                border-radius: 4px;
+                font-size: 14px;
+                min-width: 200px;
+            }
+            QLineEdit:focus {
+                border-color: #1890ff;
+            }
+            QComboBox {
+                padding: 8px;
+                border: 1px solid #d9d9d9;
+                border-radius: 4px;
+                font-size: 14px;
+                min-width: 200px;
+            }
+            QComboBox:focus {
+                border-color: #1890ff;
+            }
+            QPushButton {
+                padding: 8px 16px;
+                border-radius: 4px;
+                border: none;
+                font-size: 14px;
+                background-color: #1890ff;
+                color: white;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                background-color: #40a9ff;
+            }
+            QPushButton:pressed {
+                background-color: #096dd9;
+            }
+            QPushButton:disabled {
+                background-color: #d9d9d9;
+                color: #999999;
+            }
+        """
+    
+    @staticmethod
     def apply_style(widget: QWidget):
         """应用样式到组件
         

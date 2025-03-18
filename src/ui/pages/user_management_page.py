@@ -12,7 +12,7 @@ from ..managers.animation import AnimationManager
 from src.utils.performance_manager import PerformanceManager
 from src.utils.error_handler import ErrorHandler
 from src.core.database import DatabaseManager
-from src.models.user import User
+from src.models.user import User, UserRole
 import pandas as pd
 import os
 
@@ -266,9 +266,9 @@ class UserManagementPage(QWidget):
                     
                 if self.role.currentText() != "全部":
                     role_map = {
-                        "超级管理员": "root-admin",
-                        "企业管理员": "corp-admin",
-                        "普通用户": "user"
+                        "超级管理员": UserRole.ROOT_ADMIN.value,
+                        "企业管理员": UserRole.WECOM_ADMIN.value,
+                        "普通用户": UserRole.NORMAL.value
                     }
                     query = query.filter_by(role=role_map[self.role.currentText()])
                     
@@ -294,9 +294,9 @@ class UserManagementPage(QWidget):
                 
                 # 角色
                 role_text = {
-                    "root-admin": "超级管理员",
-                    "corp-admin": "企业管理员",
-                    "user": "普通用户"
+                    UserRole.ROOT_ADMIN.value: "超级管理员",
+                    UserRole.WECOM_ADMIN.value: "企业管理员",
+                    UserRole.NORMAL.value: "普通用户"
                 }.get(record.role, "未知")
                 self.table.setItem(row, 2, QTableWidgetItem(role_text))
                 
@@ -453,9 +453,9 @@ class UserManagementPage(QWidget):
                     "用户ID": record.user_id,
                     "用户名": record.username,
                     "角色": {
-                        "root-admin": "超级管理员",
-                        "corp-admin": "企业管理员",
-                        "user": "普通用户"
+                        UserRole.ROOT_ADMIN.value: "超级管理员",
+                        UserRole.WECOM_ADMIN.value: "企业管理员",
+                        UserRole.NORMAL.value: "普通用户"
                     }.get(record.role, "未知"),
                     "状态": "正常" if record.status else "禁用",
                     "创建时间": record.create_time.strftime("%Y-%m-%d %H:%M:%S")

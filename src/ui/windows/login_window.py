@@ -52,22 +52,12 @@ class LoginWindow(QMainWindow):
         title_label.setStyleSheet("font-size: 24px; font-weight: bold; margin-bottom: 20px;")
         layout.addWidget(title_label)
         
-        # 企业选择
-        corp_layout = QHBoxLayout()
-        corp_label = QLabel("企业名称:")
-        self.corp_combo = QComboBox()
-        self.corp_combo.setEditable(True)
-        self.corp_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.corp_combo.currentTextChanged.connect(self.on_corp_changed)
-        corp_layout.addWidget(corp_label)
-        corp_layout.addWidget(self.corp_combo)
-        layout.addLayout(corp_layout)
-        
         # 用户名
         username_layout = QHBoxLayout()
         username_label = QLabel("用户名:")
         self.username_edit = QLineEdit()
         self.username_edit.setPlaceholderText("请输入用户名")
+        self.username_edit.textChanged.connect(self.on_username_changed)
         username_layout.addWidget(username_label)
         username_layout.addWidget(self.username_edit)
         layout.addLayout(username_layout)
@@ -81,6 +71,17 @@ class LoginWindow(QMainWindow):
         password_layout.addWidget(password_label)
         password_layout.addWidget(self.password_edit)
         layout.addLayout(password_layout)
+        
+        # 企业选择
+        corp_layout = QHBoxLayout()
+        corp_label = QLabel("企业名称:")
+        self.corp_combo = QComboBox()
+        self.corp_combo.setEditable(True)
+        self.corp_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.corp_combo.currentTextChanged.connect(self.on_corp_changed)
+        corp_layout.addWidget(corp_label)
+        corp_layout.addWidget(self.corp_combo)
+        layout.addLayout(corp_layout)
         
         # 企业信息
         self.corp_info = QLabel()
@@ -123,14 +124,33 @@ class LoginWindow(QMainWindow):
             logger.error(f"加载企业列表失败: {str(e)}")
             QMessageBox.warning(self, "警告", "加载企业列表失败")
     
+    def on_username_changed(self, text: str):
+        """用户名输入变化事件"""
+        # 如果是root-admin，禁用企业选择
+        if text.strip().lower() == "root-admin":
+            self.corp_combo.setEnabled(False)
+            self.corp_combo.setCurrentText("")
+            self.corp_info.setText("超级管理员无需选择企业")
+        else:
+            self.corp_combo.setEnabled(True)
+            # 恢复企业信息显示
+            corp_name = self.corp_combo.currentText()
+            if corp_name:
+                self.on_corp_changed(corp_name)
+    
     def on_corp_changed(self, corpname: str):
         """企业选择改变"""
         try:
+            # 如果是root-admin，不显示企业信息
+            if self.username_edit.text().strip().lower() == "root-admin":
+                self.corp_info.setText("超级管理员无需选择企业")
+                return
+                
             corp = self.config_manager.get_corporation(corpname)
             if corp:
                 info_text = f"企业ID: {corp['corpid']}\n"
                 info_text += f"应用ID: {corp['agentid']}\n"
-                info_text += f"描述: {corp['description']}"
+                info_text += f"状态: {'启用' if corp['status'] else '禁用'}"
                 self.corp_info.setText(info_text)
             else:
                 self.corp_info.setText("")
@@ -142,26 +162,35 @@ class LoginWindow(QMainWindow):
         """登录按钮点击"""
         username = self.username_edit.text().strip()
         password = self.password_edit.text().strip()
-        corpname = self.corp_combo.currentText().strip()
         
         if not username or not password:
             QMessageBox.warning(self, "警告", "请输入用户名和密码")
             return
         
-        if not corpname:
-            QMessageBox.warning(self, "警告", "请选择或输入企业名称")
-            return
+        # 如果是root-admin，不需要验证企业
+        if username.lower() == "root-admin":
+            corpname = None
+        else:
+            corpname = self.corp_combo.currentText().strip()
+            if not corpname:
+                QMessageBox.warning(self, "警告", "请选择或输入企业名称")
+                return
         
         try:
-            user = self.auth_manager.login(username, password)
-            if user:
+            success, message = self.auth_manager.login(username, password, corpname)
+            if success:
                 logger.info(f"用户 {username} 登录成功")
                 # 创建主窗口
-                self.main_window = MainWindow(user, self.config_manager, self.db_manager)
+                self.main_window = MainWindow(
+                    {"userid": username},  # 传递用户信息
+                    self.config_manager,
+                    self.db_manager,
+                    self.auth_manager
+                )
                 self.main_window.show()
                 self.close()
             else:
-                QMessageBox.warning(self, "错误", "用户名或密码错误")
+                QMessageBox.warning(self, "错误", message)
         except Exception as e:
             logger.error(f"登录失败: {str(e)}")
             QMessageBox.critical(self, "错误", "登录失败，请稍后重试") 

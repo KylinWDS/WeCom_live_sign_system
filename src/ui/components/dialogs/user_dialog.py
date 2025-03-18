@@ -1,19 +1,21 @@
 # PySide6导入
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QLineEdit, QPushButton, QComboBox, QMessageBox)
+                             QLineEdit, QPushButton, QComboBox, QMessageBox,
+                             QCheckBox, QGroupBox, QFormLayout)
 from PySide6.QtCore import Qt
 
 # UI相关导入
 from .base_dialog import BaseDialog
-from ..managers.style import StyleManager
-from ..utils.widget_utils import WidgetUtils
+from src.ui.managers.style import StyleManager
+from src.ui.utils.widget_utils import WidgetUtils
 
 # 核心功能导入
-from core.database import DatabaseManager
-from core.user import UserRole
+from src.core.database import DatabaseManager
+from src.models.user import User, UserRole
+from src.utils.token_manager import TokenManager
 
 # 工具类导入
-from utils.logger import get_logger
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -55,7 +57,7 @@ class UserDialog(BaseDialog):
         role_layout = QHBoxLayout()
         role_layout.addWidget(QLabel("角色:"))
         self.role = QComboBox()
-        self.role.addItems(["普通用户", "企业微信管理员"])
+        self.role.addItems(["超级管理员", "企业微信管理员", "普通用户"])
         role_layout.addWidget(self.role)
         self.content_layout.addLayout(role_layout)
         
@@ -121,11 +123,17 @@ class UserDialog(BaseDialog):
     def load_user_data(self):
         """加载用户数据"""
         self.username.setText(self.user.username)
-        self.role.setCurrentIndex(1 if self.user.role == UserRole.WECOM_ADMIN else 0)
+        # 根据用户角色设置下拉框选项
+        role_index = {
+            UserRole.ROOT_ADMIN.value: 0,
+            UserRole.WECOM_ADMIN.value: 1,
+            UserRole.NORMAL.value: 2
+        }.get(self.user.role, 2)  # 默认为普通用户
+        self.role.setCurrentIndex(role_index)
         self.is_active.setChecked(self.user.is_active)
         
         # 如果是企业微信管理员，加载企业微信配置
-        if self.user.role == UserRole.WECOM_ADMIN:
+        if self.user.role == UserRole.WECOM_ADMIN.value:
             self.corpname.setText(self.user.corpname)
             self.corpid.setText(self.user.corpid)
             self.corpsecret.setText(self.user.corpsecret)
@@ -134,10 +142,15 @@ class UserDialog(BaseDialog):
     
     def get_user_data(self) -> dict:
         """获取用户数据"""
+        role_map = {
+            0: UserRole.ROOT_ADMIN.value,
+            1: UserRole.WECOM_ADMIN.value,
+            2: UserRole.NORMAL.value
+        }
         data = {
             "username": self.username.text(),
             "password": self.password.text(),
-            "role": UserRole.WECOM_ADMIN if self.role.currentIndex() == 1 else UserRole.NORMAL,
+            "role": role_map[self.role.currentIndex()],
             "is_active": self.is_active.isChecked()
         }
         

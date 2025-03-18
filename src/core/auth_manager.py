@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 import hashlib
 import json
@@ -11,6 +11,7 @@ from src.utils.security import (
     check_password_strength,
     verify_admin_token
 )
+from src.models.user import UserRole, User
 
 logger = get_logger(__name__)
 
@@ -18,12 +19,218 @@ class AuthManager:
     """用户权限管理类"""
     
     def __init__(self, db_manager: DatabaseManager):
-        self.config_dir = "config"
-        self.users_file = os.path.join(self.config_dir, "users.json")
-        self.roles_file = os.path.join(self.config_dir, "roles.json")
         self.db = db_manager
-        self.load_config()
+        self.users = {}
+        self.roles = {
+            UserRole.ROOT_ADMIN.value: {
+                "name": "超级管理员",
+                "permissions": ["*"]  # 所有权限
+            },
+            UserRole.WECOM_ADMIN.value: {
+                "name": "企业微信管理员",
+                "permissions": [
+                    "manage_live",
+                    "view_live",
+                    "manage_users",
+                    "view_stats"
+                ]
+            },
+            UserRole.NORMAL.value: {
+                "name": "普通用户",
+                "permissions": [
+                    "view_live",
+                    "view_stats"
+                ]
+            }
+        }
         
+    def create_root_admin(self, username: str, password: str) -> bool:
+        """设置超级管理员密码
+        
+        Args:
+            username: 用户名
+            password: 密码
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            logger.info("开始设置超级管理员密码...")
+            
+            # 验证用户名
+            if username != "root-admin":
+                logger.error("超级管理员用户名必须为 root-admin")
+                return False
+                
+            # 生成密码哈希和盐值
+            salt = os.urandom(16).hex()  # 生成32位的十六进制盐值
+            password_hash = self.hash_password(password, salt)
+            
+            # 更新数据库中的root-admin用户
+            with self.db.get_session() as session:
+                user = session.query(User).filter_by(login_name=username).first()
+                if not user:
+                    logger.error("未找到root-admin用户，请先初始化数据库")
+                    return False
+                    
+                # 更新密码和盐值
+                user.password_hash = password_hash
+                user.salt = salt
+                user.updated_at = datetime.now()
+                
+                session.commit()
+                logger.info("超级管理员密码设置成功")
+                return True
+                
+        except Exception as e:
+            logger.error(f"设置超级管理员密码失败: {str(e)}")
+            return False
+            
+    def create_corp_admin(self, username: str, password: str, corp_name: str) -> bool:
+        """创建企业管理员账号
+        
+        Args:
+            username: 用户名
+            password: 密码
+            corp_name: 企业名称
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            logger.info(f"开始创建企业管理员账号: {username}...")
+            
+            # 生成密码哈希和盐值
+            salt = os.urandom(16).hex()
+            password_hash = self.hash_password(password, salt)
+            
+            # 创建企业管理员用户
+            with self.db.get_session() as session:
+                # 检查用户名是否已存在
+                if session.query(User).filter_by(login_name=username).first():
+                    logger.error(f"用户名已存在: {username}")
+                    return False
+                
+                # 创建用户
+                user = User(
+                    login_name=username,
+                    name=f"{corp_name}管理员",
+                    role=UserRole.WECOM_ADMIN.value,
+                    corpname=corp_name,
+                    password_hash=password_hash,
+                    salt=salt,
+                    is_active=True,
+                    is_admin=True  # 设置为管理员
+                )
+                session.add(user)
+                session.commit()
+                
+                logger.info(f"企业管理员账号创建成功: {username}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"创建企业管理员账号失败: {str(e)}")
+            return False
+            
+    def verify_user(self, username: str, password: str) -> Optional[Dict[str, Any]]:
+        """验证用户
+        
+        Args:
+            username: 用户名
+            password: 密码
+            
+        Returns:
+            Optional[Dict[str, Any]]: 用户信息
+        """
+        try:
+            # 获取用户信息
+            user = self.db.query_one(
+                "SELECT password_hash, salt, role, is_active FROM users WHERE userid = ?",
+                (username,)
+            )
+            if not user:
+                return None
+                
+            # 验证密码
+            if not verify_password(password, user[0], user[1]):
+                return None
+                
+            # 检查用户状态
+            if not user[3]:
+                return None
+                
+            return {
+                "userid": username,
+                "role": user[2],
+                "is_active": user[3]
+            }
+            
+        except Exception as e:
+            logger.error(f"验证用户失败: {str(e)}")
+            return None
+            
+    def get_user_role(self, username: str) -> Optional[str]:
+        """获取用户角色
+        
+        Args:
+            username: 用户名
+            
+        Returns:
+            Optional[str]: 角色名称
+        """
+        try:
+            user = self.users.get(username)
+            if not user:
+                return None
+                
+            return user["role"]
+            
+        except Exception as e:
+            logger.error(f"获取用户角色失败: {str(e)}")
+            return None
+            
+    def get_role_permissions(self, role: str) -> List[str]:
+        """获取角色权限
+        
+        Args:
+            role: 角色名称
+            
+        Returns:
+            List[str]: 权限列表
+        """
+        try:
+            role_info = self.roles.get(role)
+            if not role_info:
+                return []
+                
+            return role_info["permissions"]
+            
+        except Exception as e:
+            logger.error(f"获取角色权限失败: {str(e)}")
+            return []
+            
+    def has_permission(self, username: str, permission: str) -> bool:
+        """检查用户是否有权限
+        
+        Args:
+            username: 用户名
+            permission: 权限名称
+            
+        Returns:
+            bool: 是否有权限
+        """
+        try:
+            role = self.get_user_role(username)
+            if not role:
+                return False
+                
+            permissions = self.get_role_permissions(role)
+            return "*" in permissions or permission in permissions
+            
+        except Exception as e:
+            logger.error(f"检查用户权限失败: {str(e)}")
+            return False
+            
     def load_config(self):
         """加载配置"""
         try:
@@ -45,11 +252,11 @@ class AuthManager:
             else:
                 # 创建默认角色
                 self.roles = {
-                    "super_admin": {
+                    UserRole.ROOT_ADMIN.value: {
                         "name": "超级管理员",
                         "permissions": ["*"]  # 所有权限
                     },
-                    "wecom_admin": {
+                    UserRole.WECOM_ADMIN.value: {
                         "name": "企业微信管理员",
                         "permissions": [
                             "manage_live",
@@ -58,7 +265,7 @@ class AuthManager:
                             "view_stats"
                         ]
                     },
-                    "normal_user": {
+                    UserRole.NORMAL.value: {
                         "name": "普通用户",
                         "permissions": [
                             "view_live",
@@ -66,7 +273,9 @@ class AuthManager:
                         ]
                     }
                 }
-                self.save_config()
+                
+            # 保存配置
+            self.save_config()
                 
         except Exception as e:
             logger.error(f"加载配置失败: {str(e)}")
@@ -87,16 +296,28 @@ class AuthManager:
             logger.error(f"保存配置失败: {str(e)}")
             raise
             
-    def hash_password(self, password: str) -> str:
+    def hash_password(self, password: str, salt: str) -> str:
         """密码哈希
         
         Args:
             password: 原始密码
+            salt: 盐值
             
         Returns:
             哈希后的密码
         """
-        return hashlib.sha256(password.encode()).hexdigest()
+        try:
+            # 使用pbkdf2_hmac算法进行密码哈希
+            key = hashlib.pbkdf2_hmac(
+                'sha256',
+                password.encode(),
+                salt.encode(),
+                100000  # 迭代次数
+            ).hex()
+            return key
+        except Exception as e:
+            logger.error(f"密码哈希失败: {str(e)}")
+            return ""
         
     def add_user(self, username: str, password: str, role: str) -> bool:
         """添加用户
@@ -120,7 +341,7 @@ class AuthManager:
                 
             # 添加用户
             self.users[username] = {
-                "password": self.hash_password(password),
+                "password": self.hash_password(password, self.generate_salt()),
                 "role": role,
                 "created_at": datetime.now().isoformat()
             }
@@ -151,7 +372,7 @@ class AuthManager:
                 
             # 更新密码
             if password:
-                self.users[username]["password"] = self.hash_password(password)
+                self.users[username]["password"] = self.hash_password(password, self.generate_salt())
                 
             # 更新角色
             if role:
@@ -191,98 +412,6 @@ class AuthManager:
             
         except Exception as e:
             logger.error(f"删除用户失败: {str(e)}")
-            return False
-            
-    def verify_user(self, username: str, password: str) -> bool:
-        """验证用户
-        
-        Args:
-            username: 用户名
-            password: 密码
-            
-        Returns:
-            是否验证通过
-        """
-        try:
-            # 检查用户是否存在
-            if username not in self.users:
-                return False
-                
-            # 验证密码
-            return self.users[username]["password"] == self.hash_password(password)
-            
-        except Exception as e:
-            logger.error(f"验证用户失败: {str(e)}")
-            return False
-            
-    def get_user_role(self, username: str) -> Optional[str]:
-        """获取用户角色
-        
-        Args:
-            username: 用户名
-            
-        Returns:
-            用户角色
-        """
-        try:
-            # 检查用户是否存在
-            if username not in self.users:
-                return None
-                
-            return self.users[username]["role"]
-            
-        except Exception as e:
-            logger.error(f"获取用户角色失败: {str(e)}")
-            return None
-            
-    def get_role_permissions(self, role: str) -> List[str]:
-        """获取角色权限
-        
-        Args:
-            role: 角色
-            
-        Returns:
-            权限列表
-        """
-        try:
-            # 检查角色是否存在
-            if role not in self.roles:
-                return []
-                
-            return self.roles[role]["permissions"]
-            
-        except Exception as e:
-            logger.error(f"获取角色权限失败: {str(e)}")
-            return []
-            
-    def check_permission(self, username: str, permission: str) -> bool:
-        """检查用户权限
-        
-        Args:
-            username: 用户名
-            permission: 权限
-            
-        Returns:
-            是否有权限
-        """
-        try:
-            # 获取用户角色
-            role = self.get_user_role(username)
-            if not role:
-                return False
-                
-            # 获取角色权限
-            permissions = self.get_role_permissions(role)
-            
-            # 超级管理员拥有所有权限
-            if role == "super_admin":
-                return True
-                
-            # 检查权限
-            return permission in permissions
-            
-        except Exception as e:
-            logger.error(f"检查用户权限失败: {str(e)}")
             return False
             
     def get_all_users(self) -> List[Dict]:
@@ -381,7 +510,7 @@ class AuthManager:
         try:
             # 验证旧密码
             user = self.db.query_one(
-                "SELECT password, salt FROM users WHERE username = ?",
+                "SELECT password_hash, salt FROM users WHERE name = ?",
                 (username,)
             )
             
@@ -403,7 +532,7 @@ class AuthManager:
                 SET password = ?, salt = ?,
                     password_changed = 1,
                     last_password_change = CURRENT_TIMESTAMP
-                WHERE username = ?
+                WHERE name = ?
                 """,
                 (hashed, salt, username)
             )
@@ -461,12 +590,13 @@ class AuthManager:
             logger.error(error_msg)
             return False, error_msg
 
-    def login(self, username: str, password: str) -> Tuple[bool, str]:
+    def login(self, username: str, password: str, corpname: str = None) -> Tuple[bool, str]:
         """用户登录
         
         Args:
             username: 用户名
             password: 密码
+            corpname: 企业名称（可选）
             
         Returns:
             Tuple[bool, str]: (是否成功, 消息)
@@ -474,7 +604,7 @@ class AuthManager:
         try:
             # 获取用户信息
             user = self.db.query_one(
-                "SELECT password, salt FROM users WHERE username = ?",
+                "SELECT password_hash, salt, role, corpname FROM users WHERE login_name = ?",
                 (username,)
             )
             if not user:
@@ -486,11 +616,18 @@ class AuthManager:
                 
             # 检查用户状态
             if not self.db.query_one(
-                "SELECT enabled FROM users WHERE username = ?",
+                "SELECT is_active FROM users WHERE login_name = ?",
                 (username,)
             )[0]:
                 return False, "用户已被禁用"
                 
+            # 验证用户和企业的关联
+            if corpname:
+                # 超级管理员不需要验证企业关联
+                if user[2] != UserRole.ROOT_ADMIN.value:
+                    if not user[3] or user[3] != corpname:
+                        return False, "该用户不属于所选企业"
+            
             logger.info(f"用户 {username} 登录成功")
             return True, "登录成功"
             
@@ -515,21 +652,21 @@ class AuthManager:
                 
             # 获取用户信息
             user = self.db.query_one(
-                "SELECT password, salt FROM users WHERE username = ?",
+                "SELECT password_hash, salt FROM users WHERE login_name = ?",
                 (username,)
             )
             if not user:
                 return False, "用户不存在"
                 
             # 更新密码
-            hashed_password = hash_password(new_password)
+            hashed_password = self.hash_password(new_password, user[1])
             self.db.execute(
                 """
                 UPDATE users 
                 SET password = ?, salt = ?,
                     password_changed = 1,
                     last_password_change = CURRENT_TIMESTAMP
-                WHERE username = ?
+                WHERE name = ?
                 """,
                 (hashed_password, user[1], username)
             )
@@ -555,4 +692,41 @@ class AuthManager:
             return True, "令牌有效"
         except Exception as e:
             logger.error(f"验证管理员令牌失败: {str(e)}")
-            return False, "令牌验证失败" 
+            return False, "令牌验证失败"
+
+    def set_root_admin_password(self, password: str) -> bool:
+        """设置超级管理员密码
+        
+        Args:
+            password: 密码
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            logger.info("开始设置超级管理员密码...")
+            
+            # 生成密码哈希和盐值
+            salt = os.urandom(16).hex()  # 生成32位的十六进制盐值
+            password_hash = self.hash_password(password, salt)
+            
+            # 更新数据库中的root-admin用户
+            with self.db.get_session() as session:
+                user = session.query(User).filter_by(login_name="root-admin").first()
+                if not user:
+                    logger.error("未找到root-admin用户，请先初始化数据库")
+                    return False
+                    
+                # 更新密码和盐值
+                user.password_hash = password_hash
+                user.salt = salt
+                user.is_admin = True  # 确保是管理员
+                user.updated_at = datetime.now()
+                
+                session.commit()
+                logger.info("超级管理员密码设置成功")
+                return True
+                
+        except Exception as e:
+            logger.error(f"设置超级管理员密码失败: {str(e)}")
+            return False 

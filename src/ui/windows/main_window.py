@@ -30,15 +30,31 @@ logger = get_logger(__name__)
 class MainWindow(QMainWindow):
     """主窗口"""
     
-    def __init__(self):
+    def __init__(self, user, config_manager, db_manager, auth_manager):
         super().__init__()
         self.setWindowTitle("企业微信直播签到系统")
         self.setMinimumSize(1200, 800)
         
-        # 初始化组件
-        self.wecom_api = WeComAPI()
-        self.task_manager = TaskManager(self.wecom_api)
-        self.auth_manager = AuthManager()
+        # 保存用户信息和管理器
+        self.user = user
+        self.config_manager = config_manager
+        self.db_manager = db_manager
+        self.auth_manager = auth_manager
+        
+        # 获取企业信息
+        corporations = self.config_manager.get_corporations()
+        if corporations:
+            corp = corporations[0]  # 使用第一个企业的信息
+            self.wecom_api = WeComAPI(
+                corpid=corp["corpid"],
+                corpsecret=corp["corpsecret"]
+            )
+        else:
+            self.wecom_api = None
+            logger.warning("未找到企业配置信息")
+        
+        # 初始化任务管理器
+        self.task_manager = TaskManager(self.wecom_api, self.db_manager)
         
         # 设置UI
         self.init_ui()
@@ -186,7 +202,7 @@ class MainWindow(QMainWindow):
         # TODO: 获取当前登录用户
         current_user = "root-admin"  # 临时使用root-admin
         
-        return self.auth_manager.check_permission(current_user, permission)
+        return self.auth_manager.has_permission(current_user, permission)
 
     def _get_page_title(self, page_name: str) -> str:
         """获取页面标题"""

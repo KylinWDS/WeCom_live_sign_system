@@ -2,45 +2,51 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Enum
 from src.utils.logger import get_logger
-from src.models.base import BaseModel
+from src.models.base import Base
+from enum import Enum as PyEnum
 
 logger = get_logger(__name__)
 
-class UserRole:
+class UserRole(PyEnum):
     """用户角色"""
     ROOT_ADMIN = "ROOT_ADMIN"     # 超级管理员（root-admin）
     WECOM_ADMIN = "WECOM_ADMIN"   # 企业微信管理员
     NORMAL = "NORMAL"             # 普通用户
 
-class User(BaseModel):
+class User(Base):
     """用户模型"""
     
     __tablename__ = "users"
     
     # 基本信息
-    userid = Column(String(50), unique=True, nullable=False, comment="用户ID")
-    name = Column(String(50), nullable=False, comment="用户名称")
-    role = Column(String(20), nullable=False, default=UserRole.NORMAL, comment="用户角色")
+    userid = Column(Integer, primary_key=True, autoincrement=True)
+    login_name = Column(String(50), unique=True, nullable=False, comment="登录名")
+    name = Column(String(50), nullable=False, comment="用户名")
+    role = Column(String(11), nullable=False, default=UserRole.NORMAL.value)
     
     # 企业信息
-    corpname = Column(String(100), nullable=True, comment="所属企业名称")
+    corpname = Column(String(100), nullable=True, comment="企业名称")
     corpid = Column(String(50), nullable=True, comment="企业ID")
     corpsecret = Column(String(100), nullable=True, comment="企业应用Secret")
     agentid = Column(String(50), nullable=True, comment="应用ID")
     
     # 管理员信息
     is_admin = Column(Boolean, default=False, comment="是否为管理员")
-    password_hash = Column(String(100), nullable=True, comment="密码哈希")
+    password_hash = Column(String(128), nullable=True, comment="密码哈希")
+    salt = Column(String(32), nullable=True, comment="密码盐值")
     
     # 状态信息
     is_active = Column(Boolean, default=True, comment="是否激活")
     last_login = Column(DateTime, nullable=True, comment="最后登录时间")
+    last_active_time = Column(DateTime, nullable=True, comment="最后活跃时间")
+    created_at = Column(DateTime, nullable=False, default=datetime.now, comment="创建时间")
+    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now, comment="更新时间")
     
     def to_dict(self) -> dict:
         """转换为字典"""
-        base_dict = super().to_dict()
-        base_dict.update({
+        return {
             "userid": self.userid,
+            "login_name": self.login_name,
             "name": self.name,
             "role": self.role,
             "corpname": self.corpname,
@@ -49,17 +55,20 @@ class User(BaseModel):
             "agentid": self.agentid,
             "is_admin": self.is_admin,
             "is_active": self.is_active,
-            "last_login": self.last_login.strftime("%Y-%m-%d %H:%M:%S") if self.last_login else None
-        })
-        return base_dict
+            "last_login": self.last_login.strftime("%Y-%m-%d %H:%M:%S") if self.last_login else None,
+            "last_active_time": self.last_active_time.strftime("%Y-%m-%d %H:%M:%S") if self.last_active_time else None,
+            "created_at": self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else None,
+            "updated_at": self.updated_at.strftime("%Y-%m-%d %H:%M:%S") if self.updated_at else None
+        }
     
     @classmethod
     def from_dict(cls, data: dict) -> "User":
         """从字典创建用户"""
         try:
             # 转换时间字符串为datetime对象
-            if "last_login" in data and isinstance(data["last_login"], str):
-                data["last_login"] = datetime.strptime(data["last_login"], "%Y-%m-%d %H:%M:%S")
+            for field in ["last_login", "created_at", "updated_at"]:
+                if field in data and isinstance(data[field], str):
+                    data[field] = datetime.strptime(data[field], "%Y-%m-%d %H:%M:%S")
             
             return cls(**data)
             
@@ -69,7 +78,7 @@ class User(BaseModel):
     
     def is_root_admin(self) -> bool:
         """是否为超级管理员"""
-        return self.userid == "root-admin" and self.role == UserRole.ROOT_ADMIN
+        return self.role == UserRole.ROOT_ADMIN
     
     def is_wecom_admin(self) -> bool:
         """是否为企业微信管理员"""
@@ -104,4 +113,12 @@ class User(BaseModel):
             
         except Exception as e:
             logger.error(f"更新最后登录时间失败: {str(e)}")
+            raise 
+    
+    def update_last_active_time(self):
+        """更新最后活跃时间"""
+        try:
+            self.last_active_time = datetime.now()
+        except Exception as e:
+            logger.error(f"更新最后活跃时间失败: {str(e)}")
             raise 
