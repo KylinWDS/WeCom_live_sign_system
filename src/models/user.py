@@ -30,6 +30,9 @@ class User(Base):
     corpsecret = Column(String(100), nullable=True, comment="企业应用Secret")
     agentid = Column(String(50), nullable=True, comment="应用ID")
     
+    # 企业微信账号code
+    wecom_code = Column(String(100), nullable=True, comment='企业微信账号code')
+    
     # 管理员信息
     is_admin = Column(Boolean, default=False, comment="是否为管理员")
     password_hash = Column(String(128), nullable=True, comment="密码哈希")

@@ -7,6 +7,7 @@ from PySide6.QtGui import QIcon
 
 # UI相关导入
 from ..managers.style import StyleManager
+from ..managers.theme_manager import ThemeManager
 from ..utils.widget_utils import WidgetUtils
 from ..managers.animation import AnimationManager
 from .main_window import MainWindow
@@ -30,7 +31,26 @@ class LoginWindow(QMainWindow):
         self.config_manager = config_manager
         self.db_manager = db_manager
         self.main_window = None
+        
+        # 初始化主题管理器
+        self.theme_manager = ThemeManager()
+        
         self.init_ui()
+        
+        # 应用主题设置
+        self._apply_theme()
+    
+    def _apply_theme(self):
+        """应用主题设置"""
+        try:
+            # 从配置获取主题设置
+            theme = self.config_manager.get_theme()
+            
+            # 应用主题
+            self.theme_manager.apply_theme(theme)
+            
+        except Exception as e:
+            logger.error(f"应用主题失败: {str(e)}")
     
     def init_ui(self):
         """初始化UI"""

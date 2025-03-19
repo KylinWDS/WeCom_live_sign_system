@@ -2,7 +2,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QLabel, QLineEdit, QTextEdit, QComboBox,
                              QDateTimeEdit, QSpinBox, QMessageBox, QGroupBox,
                              QTableWidget, QTableWidgetItem, QDialog, QFormLayout,
-                             QHeaderView, QFileDialog)
+                             QHeaderView, QFileDialog, QToolBar)
 from PySide6.QtCore import Qt, QDateTime
 from PySide6.QtGui import QIcon
 from ..managers.style import StyleManager
@@ -72,14 +72,17 @@ class LiveBookingPage(QWidget):
         
     def _create_toolbar(self):
         """创建工具栏"""
-        toolbar = QHBoxLayout()
+        toolbar = QToolBar()
+        toolbar.setObjectName("toolbar")
         
         # 创建表单
         form_group = self._create_form_group()
         toolbar.addWidget(form_group)
         
-        # 创建按钮
-        button_layout = QHBoxLayout()
+        # 创建按钮容器
+        button_widget = QWidget()
+        button_layout = QHBoxLayout(button_widget)
+        button_layout.setContentsMargins(0, 0, 0, 0)
         
         # 保存按钮
         save_btn = QPushButton("保存")
@@ -93,7 +96,7 @@ class LiveBookingPage(QWidget):
         cancel_btn.clicked.connect(self._on_cancel)
         button_layout.addWidget(cancel_btn)
         
-        toolbar.addLayout(button_layout)
+        toolbar.addWidget(button_widget)
         
         return toolbar
         
@@ -338,4 +341,192 @@ class LiveBookingPage(QWidget):
                 session.commit()
         except Exception as e:
             ErrorHandler.handle_error(e, self, "保存直播信息到数据库失败")
-            raise 
+            raise
+            
+    def search(self):
+        """搜索直播记录"""
+        try:
+            # 获取搜索条件
+            title = self.live_title.text().strip()
+            status = self.live_status.currentText()
+            time = self.live_time.text().strip()
+            
+            # 构建查询
+            with self.db_manager.get_session() as session:
+                query = session.query(LiveBooking)
+                
+                # 应用搜索条件
+                if title:
+                    query = query.filter(LiveBooking.theme.like(f"%{title}%"))
+                    
+                if status != "全部":
+                    status_map = {
+                        "未开始": 0,
+                        "进行中": 1,
+                        "已结束": 2
+                    }
+                    query = query.filter_by(status=status_map[status])
+                    
+                # 获取结果
+                records = query.all()
+                
+            # 更新表格
+            self.update_table(records)
+            
+        except Exception as e:
+            ErrorHandler.handle_error(e, self, "搜索直播记录失败")
+            
+    def load_data(self):
+        """加载直播记录"""
+        try:
+            # 获取所有记录
+            with self.db_manager.get_session() as session:
+                records = session.query(LiveBooking).all()
+                
+            # 更新表格
+            self.update_table(records)
+            
+        except Exception as e:
+            ErrorHandler.handle_error(e, self, "加载直播记录失败")
+            
+    def update_table(self, records):
+        """更新表格数据
+        
+        Args:
+            records: 直播记录列表
+        """
+        try:
+            # 清空表格
+            self.table.setRowCount(0)
+            
+            # 添加记录
+            for record in records:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                
+                # 设置单元格数据
+                self.table.setItem(row, 0, QTableWidgetItem(record.livingid))
+                self.table.setItem(row, 1, QTableWidgetItem(record.theme))
+                self.table.setItem(row, 2, QTableWidgetItem(record.living_start.strftime("%Y-%m-%d %H:%M:%S")))
+                
+                # 状态
+                status_text = {
+                    0: "预约中",
+                    1: "直播中",
+                    2: "已结束",
+                    3: "已过期",
+                    4: "已取消"
+                }.get(record.status, "未知")
+                self.table.setItem(row, 3, QTableWidgetItem(status_text))
+                
+                # 观看人数和签到人数
+                self.table.setItem(row, 4, QTableWidgetItem(str(record.viewer_num or 0)))
+                self.table.setItem(row, 5, QTableWidgetItem(str(record.sign_count or 0)))
+                
+                # 操作按钮
+                btn_widget = QWidget()
+                btn_layout = QHBoxLayout(btn_widget)
+                btn_layout.setContentsMargins(0, 0, 0, 0)
+                
+                view_btn = QPushButton("查看")
+                view_btn.setObjectName("linkButton")
+                view_btn.clicked.connect(lambda checked, r=record: self.view_details(r))
+                btn_layout.addWidget(view_btn)
+                
+                edit_btn = QPushButton("编辑")
+                edit_btn.setObjectName("linkButton")
+                edit_btn.clicked.connect(lambda checked, r=record: self.edit_live(r))
+                btn_layout.addWidget(edit_btn)
+                
+                cancel_btn = QPushButton("取消")
+                cancel_btn.setObjectName("linkButton")
+                cancel_btn.clicked.connect(lambda checked, r=record: self.cancel_live(r))
+                btn_layout.addWidget(cancel_btn)
+                
+                self.table.setCellWidget(row, 6, btn_widget)
+                
+        except Exception as e:
+            ErrorHandler.handle_error(e, self, "更新表格数据失败")
+            
+    def view_details(self, record: LiveBooking):
+        """查看直播详情
+        
+        Args:
+            record: 直播记录
+        """
+        try:
+            # 获取直播详情
+            response = self.wecom_api.get_living_info(record.livingid)
+            
+            if response["errcode"] == 0:
+                # 显示详情对话框
+                dialog = LiveDetailsDialog(response["living_info"], self)
+                dialog.exec()
+            else:
+                ErrorHandler.handle_warning(
+                    f"获取直播详情失败：{response['errmsg']}",
+                    self,
+                    "失败"
+                )
+                
+        except Exception as e:
+            ErrorHandler.handle_error(e, self, "查看直播详情失败")
+            
+    def edit_live(self, record: LiveBooking):
+        """编辑直播
+        
+        Args:
+            record: 直播记录
+        """
+        try:
+            # 填充表单
+            self.anchor_input.setText(record.anchor_userid)
+            self.title_input.setText(record.theme)
+            self.start_time.setDateTime(record.living_start)
+            self.duration.setValue(record.living_duration)
+            self.type_combo.setCurrentIndex(record.type)
+            self.desc_input.setText(record.description)
+            
+            # 保存当前记录ID
+            self.current_record = record
+            
+        except Exception as e:
+            ErrorHandler.handle_error(e, self, "编辑直播失败")
+            
+    def cancel_live(self, record: LiveBooking):
+        """取消直播
+        
+        Args:
+            record: 直播记录
+        """
+        try:
+            # 确认取消
+            if not ErrorHandler.handle_question(
+                "确定要取消该直播吗？",
+                self,
+                "确认取消"
+            ):
+                return
+                
+            # 调用企业微信API取消直播
+            response = self.wecom_api.cancel_live(record.livingid)
+            
+            if response["errcode"] == 0:
+                # 更新数据库
+                with self.db_manager.get_session() as session:
+                    record.status = 4  # 已取消
+                    session.commit()
+                    
+                # 刷新数据
+                self.load_data()
+                
+                ErrorHandler.handle_info("取消直播成功", self, "成功")
+            else:
+                ErrorHandler.handle_warning(
+                    f"取消直播失败：{response['errmsg']}",
+                    self,
+                    "失败"
+                )
+                
+        except Exception as e:
+            ErrorHandler.handle_error(e, self, "取消直播失败") 

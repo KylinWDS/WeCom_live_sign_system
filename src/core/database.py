@@ -258,7 +258,7 @@ class DatabaseManager:
             self.engine.dispose()
             
             # 复制数据库文件
-            shutil.copy2(self.db_config['db_path'], backup_file)
+            shutil.copy2(self.db_config['path'], backup_file)
             
             logger.info(f"数据库备份成功: {backup_file}")
             return backup_file
@@ -285,7 +285,7 @@ class DatabaseManager:
             self.engine.dispose()
             
             # 复制备份文件到数据库位置
-            shutil.copy2(backup_file, self.db_config['db_path'])
+            shutil.copy2(backup_file, self.db_config['path'])
             
             logger.info(f"数据库恢复成功: {backup_file}")
             return True
@@ -356,11 +356,11 @@ class DatabaseManager:
             self.engine.dispose()
             
             # 如果新路径与原路径不同,复制数据库文件
-            if new_path != self.db_config['db_path']:
-                shutil.copy2(self.db_config['db_path'], new_path)
+            if new_path != self.db_config['path']:
+                shutil.copy2(self.db_config['path'], new_path)
             
             # 更新配置
-            self.db_config['db_path'] = new_path
+            self.db_config['path'] = new_path
             
             # 重新创建引擎
             self.engine = create_engine(
@@ -383,7 +383,7 @@ class DatabaseManager:
         """执行SQL语句"""
         try:
             # 创建数据库连接
-            conn = sqlite3.connect(self.db_config['db_path'])
+            conn = sqlite3.connect(self.db_config['path'])
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             

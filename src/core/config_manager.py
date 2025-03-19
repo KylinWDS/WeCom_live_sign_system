@@ -475,4 +475,14 @@ class ConfigManager:
         Returns:
             int: 清理天数，默认为 30
         """
-        return self.config.get("cleanup_days", 30) 
+        return self.config.get("cleanup_days", 30)
+        
+    def get_config(self) -> Dict[str, Any]:
+        """获取完整配置
+        
+        Returns:
+            Dict[str, Any]: 配置字典
+        """
+        if not self.config:
+            raise RuntimeError("配置未初始化")
+        return self.config 

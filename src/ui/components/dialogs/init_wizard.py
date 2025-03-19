@@ -13,6 +13,7 @@ from src.core.config_manager import ConfigManager
 from src.core.auth_manager import AuthManager
 from src.models.settings import Settings
 from src.models.user import User, UserRole
+from src.models.corporation import Corporation
 import os
 import json
 import traceback
@@ -744,6 +745,20 @@ class InitWizard(QWizard):
             logger.info("设置超级管理员密码...")
             if not self.auth_manager.set_root_admin_password(self.admin_password.text()):
                 raise RuntimeError("设置超级管理员密码失败")
+            
+            # 创建企业信息
+            logger.info("创建企业信息...")
+            with self.db_manager.get_session() as session:
+                # 创建企业
+                corp = Corporation(
+                    name=self.corp_name.text(),
+                    corp_id=self.corp_id.text(),
+                    corp_secret=self.corp_secret.text(),
+                    agent_id=self.agent_id.text(),
+                    status=True
+                )
+                session.add(corp)
+                session.commit()
             
             # 创建企业管理员账号
             logger.info("创建企业管理员账号...")

@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt
 
 # UI相关导入
 from ..managers.style import StyleManager
+from ..managers.theme_manager import ThemeManager
 from ..pages.home_page import HomePage
 from ..pages.stats_page import StatsPage
 from ..pages.settings_page import SettingsPage
@@ -41,6 +42,9 @@ class MainWindow(QMainWindow):
         self.db_manager = db_manager
         self.auth_manager = auth_manager
         
+        # 初始化主题管理器
+        self.theme_manager = ThemeManager()
+        
         # 获取企业信息
         corporations = self.config_manager.get_corporations()
         if corporations:
@@ -58,6 +62,21 @@ class MainWindow(QMainWindow):
         
         # 设置UI
         self.init_ui()
+        
+        # 应用主题设置
+        self._apply_theme()
+        
+    def _apply_theme(self):
+        """应用主题设置"""
+        try:
+            # 从配置获取主题设置
+            theme = self.config_manager.get_theme()
+            
+            # 应用主题
+            self.theme_manager.apply_theme(theme)
+            
+        except Exception as e:
+            logger.error(f"应用主题失败: {str(e)}")
         
     def init_ui(self):
         """初始化UI"""
@@ -133,6 +152,12 @@ class MainWindow(QMainWindow):
         self.live_list_btn.clicked.connect(self.show_live_list)
         layout.addWidget(self.live_list_btn)
         
+        # 添加设置按钮
+        self.settings_btn = QPushButton("系统设置")
+        self.settings_btn.setObjectName("menuButton")
+        self.settings_btn.clicked.connect(self.show_settings)
+        layout.addWidget(self.settings_btn)
+        
         # 添加弹性空间
         layout.addStretch()
         
@@ -148,6 +173,7 @@ class MainWindow(QMainWindow):
             
         # 创建页面
         page = LiveBookingPage(
+            self.db_manager,
             self.wecom_api,
             self.task_manager
         )
@@ -165,6 +191,21 @@ class MainWindow(QMainWindow):
         page = LiveListPage(
             self.wecom_api,
             self.task_manager
+        )
+        self.content_stack.addWidget(page)
+        self.content_stack.setCurrentWidget(page)
+        
+    def show_settings(self):
+        """显示设置页面"""
+        # 检查权限
+        if not self.check_permission("manage_settings"):
+            QMessageBox.warning(self, "警告", "您没有权限访问此功能")
+            return
+            
+        # 创建页面
+        page = SettingsPage(
+            self.auth_manager,
+            self.db_manager
         )
         self.content_stack.addWidget(page)
         self.content_stack.setCurrentWidget(page)
@@ -199,10 +240,14 @@ class MainWindow(QMainWindow):
         Returns:
             是否有权限
         """
-        # TODO: 获取当前登录用户
-        current_user = "root-admin"  # 临时使用root-admin
-        
-        return self.auth_manager.has_permission(current_user, permission)
+        try:
+            # 使用当前登录用户
+            if self.user and "userid" in self.user:
+                return self.auth_manager.has_permission(self.user["userid"], permission)
+            return False
+        except Exception as e:
+            logger.error(f"检查权限失败: {str(e)}")
+            return False
 
     def _get_page_title(self, page_name: str) -> str:
         """获取页面标题"""

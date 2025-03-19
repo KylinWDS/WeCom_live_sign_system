@@ -220,13 +220,19 @@ class AuthManager:
             bool: 是否有权限
         """
         try:
-            role = self.get_user_role(username)
-            if not role:
-                return False
+            # 从数据库获取用户角色
+            with self.db.get_session() as session:
+                user = session.query(User).filter_by(login_name=username).first()
+                if not user:
+                    return False
+                    
+                # 获取角色权限
+                if user.role == UserRole.ROOT_ADMIN.value:
+                    return True  # 超级管理员拥有所有权限
+                    
+                permissions = self.roles.get(user.role, {}).get("permissions", [])
+                return "*" in permissions or permission in permissions
                 
-            permissions = self.get_role_permissions(role)
-            return "*" in permissions or permission in permissions
-            
         except Exception as e:
             logger.error(f"检查用户权限失败: {str(e)}")
             return False
@@ -628,6 +634,12 @@ class AuthManager:
                     if not user[3] or user[3] != corpname:
                         return False, "该用户不属于所选企业"
             
+            # 更新最后登录时间
+            self.db.execute(
+                "UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE login_name = ?",
+                (username,)
+            )
+            
             logger.info(f"用户 {username} 登录成功")
             return True, "登录成功"
             
@@ -729,4 +741,27 @@ class AuthManager:
                 
         except Exception as e:
             logger.error(f"设置超级管理员密码失败: {str(e)}")
-            return False 
+            return False
+
+    def get_current_user(self) -> Optional[User]:
+        """获取当前登录用户
+        
+        Returns:
+            Optional[User]: 当前用户对象，如果未登录则返回 None
+        """
+        try:
+            with self.db.get_session() as session:
+                # 获取最后登录的用户
+                user = session.query(User).order_by(User.last_login.desc()).first()
+                if not user:
+                    return None
+                    
+                # 检查用户是否处于活动状态
+                if not user.is_active:
+                    return None
+                    
+                return user
+                
+        except Exception as e:
+            logger.error(f"获取当前用户失败: {str(e)}")
+            return None 
