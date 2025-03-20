@@ -3,15 +3,15 @@ from datetime import datetime
 import hashlib
 import json
 import os
-from utils.logger import get_logger
-from src.core.database import DatabaseManager
-from src.utils.security import (
+from ..utils.logger import get_logger
+from .database import DatabaseManager
+from ..utils.security import (
     hash_password,
     verify_password,
     check_password_strength,
     verify_admin_token
 )
-from src.models.user import UserRole, User
+from ..models.user import UserRole, User
 
 logger = get_logger(__name__)
 
@@ -760,6 +760,8 @@ class AuthManager:
                 if not user.is_active:
                     return None
                     
+                # 重新加载用户对象以确保所有属性都被加载
+                session.refresh(user)
                 return user
                 
         except Exception as e:

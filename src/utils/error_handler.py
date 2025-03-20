@@ -7,10 +7,10 @@ from datetime import datetime
 from PySide6.QtWidgets import QMessageBox, QWidget, QApplication
 from PySide6.QtCore import QUrl, QObject, Signal
 from PySide6.QtGui import QDesktopServices
-from src.utils.logger import get_logger
-from src.utils.network import NetworkUtils
-from src.core.database import DatabaseManager
-from src.core.ip_record_manager import IPRecordManager
+from .logger import get_logger
+from .network import NetworkUtils
+from ..core.database import DatabaseManager
+from ..core.ip_record_manager import IPRecordManager
 
 logger = get_logger(__name__)
 

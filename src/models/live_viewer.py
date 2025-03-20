@@ -2,16 +2,16 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
-from src.utils.logger import get_logger
-from src.models.base import BaseModel
-from src.models.live_booking import LiveBooking
+from ..utils.logger import get_logger
+from .base import BaseModel
+from .live_booking import LiveBooking
 
 logger = get_logger(__name__)
 
 class LiveViewer(BaseModel):
-    """直播观看者模型"""
-    
-    __tablename__ = "live_viewers"
+    """直播观众模型"""
+    __tablename__ = 'live_viewers'
+    __table_args__ = {'extend_existing': True}  # 允许表重复定义
     
     # 用户信息
     userid = Column(String(50), nullable=True, comment="企业成员userid")

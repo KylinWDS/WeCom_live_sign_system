@@ -8,16 +8,16 @@ import json
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 # UI相关导入
-from src.ui.windows.login_window import LoginWindow
-from src.ui.components.dialogs.init_wizard import InitWizard
+from .ui.windows.login_window import LoginWindow
+from .ui.components.dialogs.init_wizard import InitWizard
 
 # 核心功能导入
-from src.core.database import DatabaseManager
-from src.core.config_manager import ConfigManager
-from src.core.auth_manager import AuthManager
+from .core.database import DatabaseManager
+from .core.config_manager import ConfigManager
+from .core.auth_manager import AuthManager
 
 # 工具类导入
-from src.utils.logger import get_logger, setup_logger
+from .utils.logger import get_logger, setup_logger
 
 def show_error_dialog(title: str, message: str):
     """显示错误对话框"""

@@ -13,12 +13,16 @@ from ..managers.animation import AnimationManager
 from .main_window import MainWindow
 
 # 核心功能导入
-from core.config_manager import ConfigManager
-from core.database import DatabaseManager
-from core.auth_manager import AuthManager
+from ...core.config_manager import ConfigManager
+from ...core.database import DatabaseManager
+from ...core.auth_manager import AuthManager
 
 # 工具类导入
-from utils.logger import get_logger
+from ...utils.logger import get_logger
+
+# 模型导入
+from ...models.corporation import Corporation
+from ...models.user import User
 
 logger = get_logger(__name__)
 
@@ -132,14 +136,39 @@ class LoginWindow(QMainWindow):
     def load_corp_list(self):
         """加载企业列表"""
         try:
-            corporations = self.config_manager.get_corporations()
-            self.corp_combo.clear()
-            for corp in corporations:
-                self.corp_combo.addItem(corp["name"])
-            
-            # 如果有企业，显示第一个企业的信息
-            if corporations:
-                self.on_corp_changed(corporations[0]["name"])
+            # 先从数据库获取企业列表
+            with self.db_manager.get_session() as session:
+                corporations = session.query(Corporation).filter_by(status=True).all()
+                # 在会话关闭前获取所有需要的数据
+                corp_data = []
+                for corp in corporations:
+                    corp_data.append({
+                        'name': corp.name,
+                        'corp_id': corp.corp_id,
+                        'agent_id': corp.agent_id,
+                        'status': corp.status
+                    })
+                
+            if corp_data:
+                # 如果数据库中有企业信息，使用数据库中的信息
+                self.corp_combo.clear()
+                for corp in corp_data:
+                    self.corp_combo.addItem(corp['name'])
+                
+                # 显示第一个企业的信息
+                if corp_data:
+                    self.on_corp_changed(corp_data[0]['name'])
+            else:
+                # 如果数据库中没有企业信息，从配置文件获取
+                corporations = self.config_manager.get_corporations()
+                self.corp_combo.clear()
+                for corp in corporations:
+                    self.corp_combo.addItem(corp["name"])
+                
+                # 如果有企业，显示第一个企业的信息
+                if corporations:
+                    self.on_corp_changed(corporations[0]["name"])
+                    
         except Exception as e:
             logger.error(f"加载企业列表失败: {str(e)}")
             QMessageBox.warning(self, "警告", "加载企业列表失败")
@@ -166,14 +195,32 @@ class LoginWindow(QMainWindow):
                 self.corp_info.setText("超级管理员无需选择企业")
                 return
                 
-            corp = self.config_manager.get_corporation(corpname)
-            if corp:
-                info_text = f"企业ID: {corp['corpid']}\n"
-                info_text += f"应用ID: {corp['agentid']}\n"
-                info_text += f"状态: {'启用' if corp['status'] else '禁用'}"
-                self.corp_info.setText(info_text)
-            else:
-                self.corp_info.setText("")
+            # 先从数据库获取企业信息
+            with self.db_manager.get_session() as session:
+                corp = session.query(Corporation).filter_by(name=corpname).first()
+                if corp:
+                    # 在会话关闭前获取所有需要的数据
+                    corp_info = {
+                        'name': corp.name,
+                        'corp_id': corp.corp_id,
+                        'agent_id': corp.agent_id,
+                        'status': corp.status
+                    }
+                    # 使用获取到的数据更新显示
+                    info_text = f"企业ID: {corp_info['corp_id']}\n"
+                    info_text += f"应用ID: {corp_info['agent_id']}\n"
+                    info_text += f"状态: {'启用' if corp_info['status'] else '禁用'}"
+                    self.corp_info.setText(info_text)
+                else:
+                    # 如果数据库中没有企业信息，从配置文件获取
+                    corp = self.config_manager.get_corporation(corpname)
+                    if corp:
+                        info_text = f"企业ID: {corp['corpid']}\n"
+                        info_text += f"应用ID: {corp['agentid']}\n"
+                        info_text += f"状态: {'启用' if corp['status'] else '禁用'}"
+                        self.corp_info.setText(info_text)
+                    else:
+                        self.corp_info.setText("")
         except Exception as e:
             logger.error(f"更新企业信息失败: {str(e)}")
             self.corp_info.setText("")
@@ -200,15 +247,28 @@ class LoginWindow(QMainWindow):
             success, message = self.auth_manager.login(username, password, corpname)
             if success:
                 logger.info(f"用户 {username} 登录成功")
-                # 创建主窗口
-                self.main_window = MainWindow(
-                    {"userid": username},  # 传递用户信息
-                    self.config_manager,
-                    self.db_manager,
-                    self.auth_manager
-                )
-                self.main_window.show()
-                self.close()
+                # 获取完整的用户信息并在新的会话中使用
+                session = self.db_manager.Session()
+                try:
+                    user = session.query(User).filter_by(login_name=username).first()
+                    if user:
+                        # 创建主窗口并保持会话
+                        self.main_window = MainWindow(
+                            user,  # 传递完整的用户对象
+                            self.config_manager,
+                            self.db_manager,
+                            self.auth_manager
+                        )
+                        # 将会话保存到主窗口中
+                        self.main_window.db_session = session
+                        self.main_window.show()
+                        self.close()
+                    else:
+                        session.close()
+                        QMessageBox.warning(self, "错误", "获取用户信息失败")
+                except Exception as e:
+                    session.close()
+                    raise e
             else:
                 QMessageBox.warning(self, "错误", message)
         except Exception as e:

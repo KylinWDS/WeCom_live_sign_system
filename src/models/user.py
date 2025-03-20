@@ -1,9 +1,12 @@
 from datetime import datetime
 from typing import Optional
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Enum
-from src.utils.logger import get_logger
-from src.models.base import Base
+from sqlalchemy.orm import relationship
+from ..utils.logger import get_logger
+from .base import Base
 from enum import Enum as PyEnum
+import os
+import hashlib
 
 logger = get_logger(__name__)
 
@@ -44,6 +47,10 @@ class User(Base):
     last_active_time = Column(DateTime, nullable=True, comment="最后活跃时间")
     created_at = Column(DateTime, nullable=False, default=datetime.now, comment="创建时间")
     updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now, comment="更新时间")
+    
+    # 关联关系
+    config_changes = relationship('ConfigChange', back_populates='user')
+    operation_logs = relationship('OperationLog', back_populates='user')
     
     def to_dict(self) -> dict:
         """转换为字典"""
@@ -92,19 +99,54 @@ class User(Base):
         return self.role == UserRole.NORMAL
     
     def set_password(self, password: str):
-        """设置密码"""
+        """设置密码
+        
+        Args:
+            password: 原始密码
+        """
         try:
-            # TODO: 实现密码加密
-            self.password_hash = password
+            # 生成随机盐值
+            self.salt = os.urandom(16).hex()
+            
+            # 使用PBKDF2进行密码哈希
+            key = hashlib.pbkdf2_hmac(
+                'sha256',
+                password.encode(),
+                self.salt.encode(),
+                100000  # 迭代次数
+            ).hex()
+            
+            self.password_hash = key
+            logger.info(f"用户 {self.login_name} 密码设置成功")
+            
         except Exception as e:
             logger.error(f"设置密码失败: {str(e)}")
             raise
     
     def verify_password(self, password: str) -> bool:
-        """验证密码"""
+        """验证密码
+        
+        Args:
+            password: 待验证的密码
+            
+        Returns:
+            bool: 是否验证通过
+        """
         try:
-            # TODO: 实现密码验证
-            return self.password_hash == password
+            # 如果是首次登录（密码未设置）
+            if not self.password_hash or not self.salt:
+                return True
+            
+            # 使用相同的盐值和哈希算法计算密码哈希
+            key = hashlib.pbkdf2_hmac(
+                'sha256',
+                password.encode(),
+                self.salt.encode(),
+                100000  # 迭代次数
+            ).hex()
+            
+            return key == self.password_hash
+            
         except Exception as e:
             logger.error(f"验证密码失败: {str(e)}")
             return False

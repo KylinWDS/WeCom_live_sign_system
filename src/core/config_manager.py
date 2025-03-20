@@ -4,10 +4,10 @@ import shutil
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional
-from src.utils.logger import get_logger
-from src.models.user import UserRole
-from src.config.database import get_default_paths
-from src.core.database import get_db_connection_config
+from ..utils.logger import get_logger
+from ..models.user import UserRole
+from ..config.database import get_default_paths
+from .database import get_db_connection_config
 
 logger = get_logger(__name__)
 
@@ -21,6 +21,7 @@ class ConfigManager:
         self.backup_dir = None
         self.config = None
         self.logger = logger
+        self.current_user = None
         logger.info("初始化ConfigManager...")
         
     def initialize(self, config_dir: str, system_config: Dict[str, Any] = None) -> bool:
@@ -253,12 +254,16 @@ class ConfigManager:
                 logger.error("配置未初始化，无法清理备份")
                 return False
                 
+            # 如果备份目录未设置，使用默认路径
             if not self.backup_dir:
-                logger.warning("备份目录未设置，跳过清理")
-                return True
+                self.backup_dir = os.path.join(self.config_dir, "backups")
+                os.makedirs(self.backup_dir, exist_ok=True)
                 
             # 获取备份保留天数
-            retention_days = self.config.get("system", {}).get("backup_retention", 30)
+            retention_days = 30  # 默认保留30天
+            if self.config and "system" in self.config:
+                retention_days = self.config["system"].get("backup_retention", 30)
+            
             if retention_days <= 0:
                 return True
                 
@@ -389,8 +394,23 @@ class ConfigManager:
                     config[k] = {}
                 config = config[k]
                 
-            # 设置值
+            # 获取旧值
+            old_value = config.get(keys[-1])
+            
+            # 设置新值
             config[keys[-1]] = value
+            
+            # 记录配置变更
+            if old_value != value:
+                self._record_config_change(
+                    change_type="config",
+                    details={
+                        "key": key,
+                        "old_value": old_value,
+                        "new_value": value
+                    }
+                )
+            
             return True
             
         except Exception as e:
@@ -399,7 +419,19 @@ class ConfigManager:
             
     def save_config(self) -> bool:
         """保存配置到文件"""
-        return self._save_config(self.config)
+        try:
+            # 记录配置变更
+            self._record_config_change(
+                change_type="file",
+                details={
+                    "action": "save",
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+            return self._save_config(self.config)
+        except Exception as e:
+            logger.error(f"保存配置失败: {str(e)}")
+            return False
         
     def reset_config(self) -> bool:
         """重置配置为默认值"""
@@ -486,3 +518,111 @@ class ConfigManager:
         if not self.config:
             raise RuntimeError("配置未初始化")
         return self.config 
+    
+    def _record_config_change(self, change_type: str, details: str):
+        """记录配置变更
+        
+        Args:
+            change_type: 变更类型
+            details: 变更详情
+        """
+        try:
+            if not self.current_user:
+                return
+                
+            from ..models.config_change import ConfigChange
+            from ..core.database import DatabaseManager
+            
+            db_manager = DatabaseManager()
+            session = db_manager.Session()
+            try:
+                # 确保用户对象绑定到会话
+                user = session.merge(self.current_user)
+                
+                # 创建配置变更记录
+                change = ConfigChange(
+                    user_id=user.userid,
+                    change_type=change_type,
+                    change_content=details,
+                    change_time=datetime.now(),
+                    ip_address=self._get_client_ip()
+                )
+                # 设置关联关系
+                change.user = user
+                
+                session.add(change)
+                session.commit()
+                self.logger.info(f"配置变更记录成功: {change_type}")
+            except Exception as e:
+                session.rollback()
+                self.logger.error(f"记录配置变更失败: {str(e)}")
+            finally:
+                session.close()
+                
+        except Exception as e:
+            self.logger.error(f"记录配置变更失败: {str(e)}")
+
+    def _record_operation_log(self, operation: str, details: str):
+        """记录操作日志
+        
+        Args:
+            operation: 操作类型
+            details: 操作详情
+        """
+        try:
+            if not self.current_user:
+                return
+                
+            from ..models.operation_log import OperationLog
+            from ..core.database import DatabaseManager
+            
+            db_manager = DatabaseManager()
+            session = db_manager.Session()
+            try:
+                # 确保用户对象绑定到会话
+                user = session.merge(self.current_user)
+                
+                # 创建操作日志
+                log = OperationLog(
+                    user_id=user.userid,
+                    operation_type=operation,
+                    operation_desc=details,
+                    operation_time=datetime.now(),
+                    ip_address=self._get_client_ip()
+                )
+                # 设置关联关系
+                log.user = user
+                
+                session.add(log)
+                session.commit()
+                self.logger.info(f"操作日志记录成功: {operation}")
+            except Exception as e:
+                session.rollback()
+                self.logger.error(f"记录操作日志失败: {str(e)}")
+            finally:
+                session.close()
+        except Exception as e:
+            self.logger.error(f"记录操作日志失败: {str(e)}")
+
+    def set_current_user(self, user):
+        """设置当前用户
+        
+        Args:
+            user: 用户对象
+        """
+        self.current_user = user
+
+    def _get_client_ip(self) -> str:
+        """获取客户端IP地址
+        
+        Returns:
+            str: IP地址
+        """
+        try:
+            import socket
+            hostname = socket.gethostname()
+            ip_address = socket.gethostbyname(hostname)
+            return ip_address
+        except Exception as e:
+            self.logger.error(f"获取IP地址失败: {str(e)}")
+            return "unknown"

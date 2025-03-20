@@ -10,12 +10,17 @@ logger = get_logger(__name__)
 class CacheManager:
     """缓存管理器"""
     
-    def __init__(self, cache_dir: str = "cache"):
+    def __init__(self, cache_dir: str = None):
         """初始化缓存管理器
         
         Args:
-            cache_dir: 缓存目录
+            cache_dir: 缓存目录，如果为None则使用用户目录下的.wecom_live_sign/cache
         """
+        if cache_dir is None:
+            # 使用用户目录下的.wecom_live_sign/cache
+            user_home = os.path.expanduser("~")
+            cache_dir = os.path.join(user_home, ".wecom_live_sign", "cache")
+            
         self.cache_dir = cache_dir
         self.memory_cache: Dict[str, Any] = {}
         self._ensure_cache_dir()

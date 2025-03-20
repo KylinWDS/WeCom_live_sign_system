@@ -7,6 +7,9 @@ class Settings(BaseModel):
     
     __tablename__ = "settings"
     
+    # 主键
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="主键ID")
+    
     # 基本信息
     name = Column(String(100), nullable=False, unique=True, comment="设置名称")
     value = Column(Text, nullable=True, comment="设置值")
@@ -16,15 +19,22 @@ class Settings(BaseModel):
     # 配置信息
     config = Column(JSON, nullable=True, comment="配置信息")
     
+    # 时间戳
+    created_at = Column(DateTime, nullable=False, default=datetime.now, comment="创建时间")
+    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now, comment="更新时间")
+    
     def to_dict(self) -> dict:
         """转换为字典"""
         base_dict = super().to_dict()
         base_dict.update({
+            "id": self.id,
             "name": self.name,
             "value": self.value,
             "type": self.type,
             "description": self.description,
-            "config": self.config
+            "config": self.config,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
         })
         return base_dict
     

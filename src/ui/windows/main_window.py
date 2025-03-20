@@ -5,10 +5,13 @@ from PySide6.QtWidgets import (
     QLineEdit, QComboBox, QMenuBar, QMenu, QStatusBar
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 
 # UI相关导入
 from ..managers.style import StyleManager
 from ..managers.theme_manager import ThemeManager
+from ..utils.widget_utils import WidgetUtils
+from ..managers.animation import AnimationManager
 from ..pages.home_page import HomePage
 from ..pages.stats_page import StatsPage
 from ..pages.settings_page import SettingsPage
@@ -17,14 +20,18 @@ from ..pages.live_list_page import LiveListPage
 from ..pages.user_management_page import UserManagementPage
 
 # 核心功能导入
-from src.core.database import DatabaseManager
-from src.models.user import UserRole
-from src.api.wecom import WeComAPI
-from src.core.task_manager import TaskManager
-from src.core.auth_manager import AuthManager
+from ...core.config_manager import ConfigManager
+from ...core.database import DatabaseManager
+from ...core.auth_manager import AuthManager
+from ...core.token_manager import TokenManager
+from ...core.task_manager import TaskManager
+from ...api.wecom import WeComAPI
+
+# 模型导入
+from ...models.corporation import Corporation
 
 # 工具类导入
-from src.utils.logger import get_logger
+from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -36,29 +43,61 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("企业微信直播签到系统")
         self.setMinimumSize(1200, 800)
         
-        # 保存用户信息和管理器
-        self.user = user
-        self.config_manager = config_manager
+        # 保存管理器
         self.db_manager = db_manager
+        self.config_manager = config_manager
         self.auth_manager = auth_manager
+        
+        # 创建新的会话并重新获取用户对象
+        self.db_session = self.db_manager.Session()
+        self.user = self.db_session.merge(user)
+        
+        # 设置当前用户到配置管理器
+        self.config_manager.set_current_user(self.user)
         
         # 初始化主题管理器
         self.theme_manager = ThemeManager()
         
         # 获取企业信息
-        corporations = self.config_manager.get_corporations()
-        if corporations:
-            corp = corporations[0]  # 使用第一个企业的信息
-            self.wecom_api = WeComAPI(
-                corpid=corp["corpid"],
-                corpsecret=corp["corpsecret"]
-            )
-        else:
+        try:
+            # 先从数据库获取企业信息
+            corporations = self.db_session.query(Corporation).filter_by(status=True).all()
+            if corporations:
+                # 在会话关闭前获取所有需要的数据
+                corp = corporations[0]  # 使用第一个企业的信息
+                corp_info = {
+                    'corp_id': corp.corp_id,
+                    'corp_secret': corp.corp_secret
+                }
+                self.wecom_api = WeComAPI(
+                    corpid=corp_info['corp_id'],
+                    corpsecret=corp_info['corp_secret']
+                )
+            else:
+                # 如果数据库中没有企业信息，从配置文件获取
+                corporations = self.config_manager.get_corporations()
+                if corporations:
+                    corp = corporations[0]  # 使用第一个企业的信息
+                    self.wecom_api = WeComAPI(
+                        corpid=corp["corpid"],
+                        corpsecret=corp["corpsecret"]
+                    )
+                else:
+                    self.wecom_api = None
+                    logger.warning("未找到企业配置信息")
+        except Exception as e:
+            logger.error(f"获取企业信息失败: {str(e)}")
             self.wecom_api = None
-            logger.warning("未找到企业配置信息")
         
         # 初始化任务管理器
-        self.task_manager = TaskManager(self.wecom_api, self.db_manager)
+        if self.wecom_api is None and self.user.login_name.lower() != 'root-admin':
+            QMessageBox.warning(self, "警告", "未找到有效的企业配置信息，部分功能可能无法使用")
+        
+        # 只有在wecom_api可用或用户是root-admin时才初始化任务管理器
+        if self.wecom_api is not None or self.user.login_name.lower() == 'root-admin':
+            self.task_manager = TaskManager(self.wecom_api, self.db_manager)
+        else:
+            self.task_manager = None
         
         # 设置UI
         self.init_ui()
@@ -104,6 +143,11 @@ class MainWindow(QMainWindow):
         
         # 设置样式
         self.setStyleSheet(StyleManager.get_main_style())
+        
+        # 如果是root-admin或者wecom_api可用，启用所有按钮
+        buttons_enabled = self.user.login_name.lower() == 'root-admin' or self.wecom_api is not None
+        self.live_booking_btn.setEnabled(buttons_enabled)
+        self.live_list_btn.setEnabled(buttons_enabled)
         
     def create_menu_bar(self):
         """创建菜单栏"""
@@ -171,6 +215,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "您没有权限访问此功能")
             return
             
+        # 检查task_manager是否可用
+        if self.task_manager is None:
+            QMessageBox.warning(self, "警告", "任务管理器未初始化，无法使用此功能")
+            return
+            
         # 创建页面
         page = LiveBookingPage(
             self.db_manager,
@@ -185,6 +234,11 @@ class MainWindow(QMainWindow):
         # 检查权限
         if not self.check_permission("view_live"):
             QMessageBox.warning(self, "警告", "您没有权限访问此功能")
+            return
+            
+        # 检查task_manager是否可用
+        if self.task_manager is None:
+            QMessageBox.warning(self, "警告", "任务管理器未初始化，无法使用此功能")
             return
             
         # 创建页面
@@ -241,9 +295,12 @@ class MainWindow(QMainWindow):
             是否有权限
         """
         try:
+             # 刷新用户对象以确保状态最新
+            self._refresh_user()
+            
             # 使用当前登录用户
-            if self.user and "userid" in self.user:
-                return self.auth_manager.has_permission(self.user["userid"], permission)
+            if self.user:
+                return self.auth_manager.has_permission(self.user.login_name, permission)
             return False
         except Exception as e:
             logger.error(f"检查权限失败: {str(e)}")
@@ -256,4 +313,22 @@ class MainWindow(QMainWindow):
         tab_widget.addTab(HomePage(self.db_manager), "首页")
         tab_widget.addTab(StatsPage(self.db_manager), "统计")
         tab_widget.addTab(SettingsPage(self.db_manager), "设置")
-        return tab_widget.tabText(tab_widget.currentIndex()) 
+        return tab_widget.tabText(tab_widget.currentIndex())
+
+    def _refresh_user(self):
+        """刷新用户对象，确保与会话绑定"""
+        try:
+            if self.db_session and self.user:
+                self.user = self.db_session.merge(self.user)
+                self.db_session.refresh(self.user)
+        except Exception as e:
+            logger.error(f"刷新用户对象失败: {str(e)}")
+
+    def closeEvent(self, event):
+        """窗口关闭时的处理"""
+        try:
+            if self.db_session:
+                self.db_session.close()
+        except Exception as e:
+            logger.error(f"关闭数据库会话时发生错误: {str(e)}")
+        super().closeEvent(event)

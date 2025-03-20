@@ -9,25 +9,28 @@ from PySide6.QtGui import QIcon
 from ..managers.style import StyleManager
 from ..managers.theme_manager import ThemeManager
 from ..utils.widget_utils import WidgetUtils
-from src.utils.logger import get_logger
+from ...utils.logger import get_logger
 from ..managers.animation import AnimationManager
-from src.utils.performance_manager import PerformanceManager
-from src.utils.error_handler import ErrorHandler
-from src.core.auth_manager import AuthManager
-from src.core.database import DatabaseManager
-from src.core.config_manager import ConfigManager
-from src.models.user import UserRole
-from src.models.settings import Settings
+from ...utils.performance_manager import PerformanceManager
+from ...utils.error_handler import ErrorHandler
+from ...core.auth_manager import AuthManager
+from ...core.database import DatabaseManager
+from ...core.config_manager import ConfigManager
+from ...models.user import UserRole
+from ...models.settings import Settings
 from ..components.dialogs.io_dialog import IODialog
-from src.models.corporation import Corporation
-from src.models.user import User
+from ...models.corporation import Corporation
+from ...models.user import User
 from ..components.dialogs.init_wizard import InitWizard
 import pandas as pd
 import os
 import json
 import shutil
+from datetime import datetime
 
 from ...models import SignRecord
+from ...models.config_change import ConfigChange
+from ...models.operation_log import OperationLog
 
 logger = get_logger(__name__)
 
@@ -42,6 +45,8 @@ class SettingsPage(QWidget):
         self.error_handler = ErrorHandler()
         self.theme_manager = ThemeManager()
         self.config_manager = ConfigManager()
+        self.session = self.db_manager.get_session()
+        self.current_user = self.auth_manager.get_current_user()
         
         # 初始化表单控件
         self.corp_name = None
@@ -132,7 +137,16 @@ class SettingsPage(QWidget):
         header.setSectionResizeMode(6, QHeaderView.Fixed)  # 操作列固定宽度
         self.corp_table.setColumnWidth(6, 200)  # 设置操作列宽度
         
-        self._setup_table(self.corp_table)
+        # 设置表格样式
+        self.corp_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.corp_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.corp_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.corp_table.horizontalHeader().setStretchLastSection(True)
+        self.corp_table.setAlternatingRowColors(True)
+        self.corp_table.verticalHeader().setDefaultSectionSize(50)
+        self.corp_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.corp_table.setMinimumHeight(300)
+        
         corp_layout.addWidget(self.corp_table)
         
         # 企业管理按钮布局
@@ -175,7 +189,16 @@ class SettingsPage(QWidget):
         header.setSectionResizeMode(10, QHeaderView.Fixed)  # 操作列固定宽度
         self.user_table.setColumnWidth(10, 250)  # 设置操作列宽度
         
-        self._setup_table(self.user_table)
+        # 设置表格样式
+        self.user_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.user_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.user_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.user_table.horizontalHeader().setStretchLastSection(True)
+        self.user_table.setAlternatingRowColors(True)
+        self.user_table.verticalHeader().setDefaultSectionSize(50)
+        self.user_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.user_table.setMinimumHeight(300)
+        
         user_layout.addWidget(self.user_table)
         
         # 用户管理按钮布局
@@ -449,67 +472,201 @@ class SettingsPage(QWidget):
     def _update_ui_by_permission(self):
         """根据用户权限更新UI"""
         try:
+            current_user = self.auth_manager.get_current_user()
+            if not current_user:
+                logger.warning("未找到当前用户")
+                return
+                
+            # 使用新的会话查询用户
+            with self.db_manager.get_session() as session:
+                user = session.query(User).filter_by(login_name=current_user.login_name).first()
+                if not user:
+                    logger.warning(f"未找到用户: {current_user.login_name}")
+                    return
+                    
+                if user.role != UserRole.SUPER_ADMIN:
+                    logger.warning(f"用户 {user.login_name} 不是超级管理员，禁用设置页面")
+                    self._log_operation("访问设置页面", "无权限访问")
+                    self.setEnabled(False)
+                    QMessageBox.warning(self, "警告", "只有超级管理员可以访问设置页面")
+                else:
+                    self._log_operation("访问设置页面", "成功访问")
+                    
+        except Exception as e:
+            logger.error(f"更新UI权限失败: {str(e)}")
+            
+    def _log_operation(self, operation_type: str, description: str):
+        """记录操作日志
+        
+        Args:
+            operation_type: 操作类型
+            description: 操作描述
+        """
+        try:
+            with self.db_manager.get_session() as session:
+                # 获取当前用户
+                current_user = self.auth_manager.get_current_user()
+                if not current_user:
+                    logger.warning("未找到当前用户")
+                    return
+                    
+                # 在当前会话中查询用户对象
+                user = session.query(User).filter_by(login_name=current_user.login_name).first()
+                if not user:
+                    logger.warning(f"未找到用户: {current_user.login_name}")
+                    return
+                    
+                # 创建操作日志
+                log = OperationLog(
+                    user_id=user.userid,
+                    operation_type=operation_type,
+                    operation_desc=description,
+                    operation_time=datetime.now(),
+                    ip_address=self._get_client_ip()
+                )
+                # 设置关联关系
+                log.user = user
+                session.add(log)
+                session.commit()
+                logger.info(f"操作日志记录成功: {operation_type}")
+                
+        except Exception as e:
+            logger.error(f"记录操作日志失败: {str(e)}")
+            if 'session' in locals():
+                session.rollback()
+        
+    def _get_client_ip(self) -> str:
+        """获取客户端IP地址
+        
+        Returns:
+            str: IP地址
+        """
+        try:
+            # 这里需要根据实际情况实现获取客户端IP的逻辑
+            # 例如从请求头中获取,或者从系统环境变量中获取
+            return "127.0.0.1"
+        except Exception as e:
+            logger.error(f"获取客户端IP失败: {str(e)}", exc_info=True)
+            return "unknown"
+        
+    def _protect_sensitive_info(self, data: dict) -> dict:
+        """保护敏感信息
+        
+        Args:
+            data: 原始数据
+            
+        Returns:
+            dict: 处理后的数据
+        """
+        try:
+            protected_data = data.copy()
+            
+            # 需要保护的敏感字段
+            sensitive_fields = [
+                "corp_secret",
+                "password",
+                "token",
+                "api_key"
+            ]
+            
+            # 处理敏感信息
+            for field in sensitive_fields:
+                if field in protected_data:
+                    protected_data[field] = "********"
+                    
+            return protected_data
+            
+        except Exception as e:
+            logger.error(f"保护敏感信息失败: {str(e)}", exc_info=True)
+            return data
+        
+    def _validate_permission(self, operation: str) -> bool:
+        """验证操作权限
+        
+        Args:
+            operation: 操作类型
+            
+        Returns:
+            bool: 是否有权限
+        """
+        try:
             with self.db_manager.get_session() as session:
                 current_user = self.auth_manager.get_current_user()
                 if not current_user:
-                    self.error_handler.handle_warning("未登录或登录已过期", self)
-                    self.setEnabled(False)
-                    return
+                    return False
                     
                 # 在 session 范围内获取用户角色
                 user_role = session.merge(current_user).role
                 
-                # 只有超级管理员可以访问设置页面
-                if user_role != UserRole.ROOT_ADMIN.value:
-                    self.error_handler.handle_warning("只有超级管理员可以访问系统设置", self)
-                    self.setEnabled(False)
-                    return
+                # 超级管理员拥有所有权限
+                if user_role == UserRole.ROOT_ADMIN.value:
+                    return True
+                    
+                # 根据操作类型判断权限
+                if operation in ["view_settings", "edit_settings"]:
+                    return user_role == UserRole.WECOM_ADMIN.value
+                    
+                if operation in ["manage_users", "manage_corps"]:
+                    return user_role == UserRole.ROOT_ADMIN.value
+                    
+                return False
                 
         except Exception as e:
-            self.error_handler.handle_error(e, self, "更新UI权限失败")
+            logger.error(f"验证权限失败: {str(e)}", exc_info=True)
+            return False
+        
+    def save_settings(self):
+        """保存设置"""
+        try:
+            # 验证权限
+            if not self._validate_permission("edit_settings"):
+                self.error_handler.handle_warning("您没有权限修改系统设置", self)
+                return
+                
+            if not self._validate_settings():
+                return
+                
+            # 显示保存进度对话框
+            progress_dialog = QDialog(self)
+            progress_dialog.setWindowTitle("正在保存设置")
+            progress_dialog.setModal(True)
+            progress_layout = QVBoxLayout(progress_dialog)
             
-    def _create_search_group(self) -> QGroupBox:
-        """创建搜索区域"""
-        group = QGroupBox("搜索条件")
-        layout = QVBoxLayout(group)
-        layout.setSpacing(10)
-        
-        # 第一行
-        row1_layout = QHBoxLayout()
-        
-        # 设置名称
-        row1_layout.addWidget(QLabel("设置名称:"))
-        self.setting_name = QLineEdit()
-        WidgetUtils.set_input_style(self.setting_name)
-        row1_layout.addWidget(self.setting_name)
-        
-        # 设置类型
-        row1_layout.addWidget(QLabel("设置类型:"))
-        self.setting_type = QComboBox()
-        self.setting_type.addItems(["全部", "系统", "用户", "其他"])
-        WidgetUtils.set_combo_style(self.setting_type)
-        row1_layout.addWidget(self.setting_type)
-        
-        layout.addLayout(row1_layout)
-        
-        # 第二行
-        row2_layout = QHBoxLayout()
-        
-        # 设置值
-        row2_layout.addWidget(QLabel("设置值:"))
-        self.setting_value = QLineEdit()
-        WidgetUtils.set_input_style(self.setting_value)
-        row2_layout.addWidget(self.setting_value)
-        
-        # 搜索按钮
-        search_btn = QPushButton("搜索")
-        search_btn.setObjectName("primaryButton")
-        search_btn.clicked.connect(self.search)
-        row2_layout.addWidget(search_btn)
-        
-        layout.addLayout(row2_layout)
-        
-        return group
+            # 进度提示标签
+            status_label = QLabel("正在保存设置...")
+            progress_layout.addWidget(status_label)
+            
+            # 显示进度对话框
+            progress_dialog.show()
+            
+            try:
+                # 保存所有设置
+                status_label.setText("正在保存系统设置...")
+                self._save_system_settings()  # 保存系统设置
+                
+                status_label.setText("正在保存企业信息...")
+                self._save_corp_settings()    # 保存企业信息
+                
+                status_label.setText("正在保存用户管理...")
+                self._save_user_settings()    # 保存用户管理
+                
+                # 记录操作日志
+                self._log_operation("保存系统设置", "成功")
+                
+                # 关闭进度对话框
+                progress_dialog.close()
+                
+                # 只显示一个成功提示
+                self.error_handler.handle_info("所有设置已保存成功", self, "保存成功")
+                
+            except Exception as e:
+                # 关闭进度对话框
+                progress_dialog.close()
+                raise e
+                
+        except Exception as e:
+            self.error_handler.handle_error(e, self, "保存设置失败")
+            self._log_operation("保存系统设置", f"失败: {str(e)}")
         
     def _create_corp_group(self) -> QGroupBox:
         """创建企业信息设置组"""
@@ -909,67 +1066,42 @@ class SettingsPage(QWidget):
             with self.db_manager.get_session() as session:
                 settings = session.query(Settings).first()
                 if settings:
-                    # 企业信息
-                    self.corp_name.setText(settings.corp_name)
-                    self.corp_id.setText(settings.corp_id)
-                    self.corp_secret.setText(settings.corp_secret)
-                    self.agent_id.setText(settings.agent_id)
-                    self.corp_status.setChecked(settings.corp_status)
-                    
-                    # 用户管理
-                    self.default_role.setCurrentText({
-                        "超级管理员": "超级管理员",
-                        "企业管理员": "企业管理员",
-                        "普通用户": "普通用户"
-                    }.get(settings.default_role, "普通用户"))
-                    self.user_status.setChecked(settings.user_status)
-                    self.password_policy.setCurrentText({
-                        "simple": "简单",
-                        "medium": "中等",
-                        "complex": "复杂"
-                    }.get(settings.password_policy, "中等"))
-                    self.password_expire.setValue(settings.password_expire)
-                    self.login_fail_limit.setValue(settings.login_fail_limit)
-                    
                     # 系统设置
                     theme_map = {
                         "system": "跟随系统",
                         "light": "明亮",
                         "dark": "暗色"
                     }
-                    self.theme.setCurrentText(theme_map.get(settings.theme, "跟随系统"))
-                    self.db_path.setText(settings.db_path)
-                    self.log_path.setText(settings.log_path)
-                    self.log_level.setCurrentText(settings.log_level)
-                    self.log_retention.setValue(settings.log_retention)
+                    if hasattr(self, 'theme_combo') and self.theme_combo:
+                        self.theme_combo.setCurrentText(theme_map.get(settings.theme, "跟随系统"))
                     
-                    # 数据管理
-                    self.data_cleanup.setChecked(settings.data_cleanup)
-                    self.cleanup_period.setValue(settings.cleanup_days)
-                    self.cleanup_scope.setCurrentText({
-                        "all": "全部数据",
-                        "sign": "仅签到记录",
-                        "log": "仅日志记录"
-                    }.get(settings.cleanup_scope, "全部数据"))
+                    # 路径设置
+                    if hasattr(self, 'db_path') and self.db_path:
+                        self.db_path.setText(settings.db_path)
+                    if hasattr(self, 'log_path') and self.log_path:
+                        self.log_path.setText(settings.log_path)
+                    if hasattr(self, 'backup_path') and self.backup_path:
+                        self.backup_path.setText(settings.backup_path)
+                    
+                    # 日志设置
+                    if hasattr(self, 'log_level') and self.log_level:
+                        self.log_level.setCurrentText(settings.log_level)
+                    
+                    # 数据管理设置
+                    if hasattr(self, 'data_cleanup') and self.data_cleanup:
+                        self.data_cleanup.setChecked(settings.data_cleanup)
+                    if hasattr(self, 'cleanup_period') and self.cleanup_period:
+                        self.cleanup_period.setValue(settings.cleanup_days)
+                    if hasattr(self, 'cleanup_scope') and self.cleanup_scope:
+                        self.cleanup_scope.setCurrentText({
+                            "all": "全部数据",
+                            "logs": "仅日志",
+                            "records": "仅记录"
+                        }.get(settings.cleanup_scope, "全部数据"))
                     
         except Exception as e:
+            logger.error(f"加载设置失败: {str(e)}")
             self.error_handler.handle_error(e, self, "加载设置失败")
-            
-    def save_settings(self):
-        """保存设置"""
-        try:
-            if not self._validate_settings():
-                return
-                
-            # 保存所有设置
-            self._save_system_settings()  # 保存系统设置
-            self._save_corp_settings()    # 保存企业信息
-            self._save_user_settings()    # 保存用户管理
-            
-            self.error_handler.handle_info("保存设置成功", self, "成功")
-            
-        except Exception as e:
-            self.error_handler.handle_error(e, self, "保存设置失败")
             
     def _save_corp_settings(self):
         """保存企业信息设置"""
@@ -977,26 +1109,44 @@ class SettingsPage(QWidget):
             with self.db_manager.get_session() as session:
                 # 获取表格中的所有企业数据
                 for row in range(self.corp_table.rowCount()):
-                    corp_name = self.corp_table.item(row, 0).text()
-                    corp_id = self.corp_table.item(row, 1).text()
-                    agent_id = self.corp_table.item(row, 3).text()
-                    status = self.corp_table.item(row, 4).text() == '启用'
+                    # 检查所有必需的单元格是否存在
+                    name_item = self.corp_table.item(row, 0)
+                    id_item = self.corp_table.item(row, 1)
+                    agent_id_item = self.corp_table.item(row, 3)
+                    status_item = self.corp_table.item(row, 4)
+                    
+                    if not all([name_item, id_item, agent_id_item, status_item]):
+                        raise Exception(f"第{row + 1}行企业数据不完整，请检查企业名称、企业ID、应用ID和状态是否都已填写")
+                    
+                    corp_name = name_item.text()
+                    corp_id = id_item.text()
+                    agent_id = agent_id_item.text()
+                    status = status_item.text() == '启用'
                     
                     # 获取或创建企业对象
                     corp = session.query(Corporation).filter_by(name=corp_name).first()
                     if not corp:
-                        corp = Corporation(name=corp_name)
+                        # 创建新企业
+                        corp = Corporation(
+                            name=corp_name,
+                            corp_id=corp_id,
+                            agent_id=agent_id,
+                            status=status
+                        )
                         session.add(corp)
-                    
-                    # 更新企业信息
-                    corp.corp_id = corp_id
-                    corp.agent_id = agent_id
-                    corp.status = status
-                    
+                        logger.info(f"创建新企业: {corp_name}")
+                    else:
+                        # 更新企业信息
+                        corp.corp_id = corp_id
+                        corp.agent_id = agent_id
+                        corp.status = status
+                        logger.info(f"更新企业信息: {corp_name}")
+                
                 session.commit()
                 
         except Exception as e:
-            raise Exception(f"保存企业信息失败: {str(e)}")
+            logger.error(f"保存企业信息失败: {str(e)}", exc_info=True)
+            raise
 
     def _save_user_settings(self):
         """保存用户管理设置"""
@@ -1004,21 +1154,33 @@ class SettingsPage(QWidget):
             with self.db_manager.get_session() as session:
                 # 获取表格中的所有用户数据
                 for row in range(self.user_table.rowCount()):
-                    login_name = self.user_table.item(row, 0).text()
-                    name = self.user_table.item(row, 1).text()
-                    role = self.user_table.item(row, 2).text()
-                    corp_name = self.user_table.item(row, 3).text()
-                    is_admin = self.user_table.item(row, 4).text() == '是'
-                    is_active = self.user_table.item(row, 5).text() == '启用'
-                    wecom_code = self.user_table.item(row, 6).text()
+                    # 检查所有必需的单元格是否存在
+                    login_name_item = self.user_table.item(row, 0)
+                    name_item = self.user_table.item(row, 1)
+                    role_item = self.user_table.item(row, 2)
+                    corp_name_item = self.user_table.item(row, 3)
+                    is_admin_item = self.user_table.item(row, 4)
+                    is_active_item = self.user_table.item(row, 5)
+                    wecom_code_item = self.user_table.item(row, 6)
+                    
+                    if not all([login_name_item, name_item, role_item, corp_name_item, 
+                              is_admin_item, is_active_item, wecom_code_item]):
+                        raise Exception(f"第{row + 1}行用户数据不完整，请检查所有字段是否都已填写")
+                    
+                    login_name = login_name_item.text()
+                    name = name_item.text()
+                    role = role_item.text()
+                    corp_name = corp_name_item.text()
+                    is_admin = is_admin_item.text() == '是'
+                    is_active = is_active_item.text() == '启用'
+                    wecom_code = wecom_code_item.text()
                     
                     # 获取用户对象
                     user = session.query(User).filter_by(login_name=login_name).first()
-                    if not user:
-                        continue  # 跳过不存在的用户
                     
-                    # 跳过root-admin用户的修改
-                    if user.role == UserRole.ROOT_ADMIN.value:
+                    # 如果是root-admin用户，跳过修改
+                    if user and user.role == UserRole.ROOT_ADMIN.value:
+                        logger.info(f"跳过root-admin用户修改: {login_name}")
                         continue
                     
                     # 根据是否管理员设置角色
@@ -1030,14 +1192,72 @@ class SettingsPage(QWidget):
                     # 获取关联企业信息
                     corp = session.query(Corporation).filter_by(name=corp_name).first()
                     if not corp and user_role != UserRole.ROOT_ADMIN.value:
-                        continue  # 非root-admin用户必须关联企业
+                        raise Exception(f"用户 {name}({login_name}) 关联的企业 {corp_name} 不存在")
                     
-                    # 更新用户信息
-                    user.name = name
-                    user.role = user_role  # 使用根据is_admin计算的角色
-                    user.is_admin = is_admin
-                    user.is_active = is_active
-                    user.wecom_code = wecom_code if wecom_code != login_name else None
+                    if not user:
+                        # 创建新用户
+                        user = User(
+                            login_name=login_name,
+                            name=name,
+                            role=user_role,
+                            is_admin=is_admin,
+                            is_active=is_active,
+                            wecom_code=wecom_code if wecom_code != login_name else None
+                        )
+                        # 创建新用户时需要设置密码
+                        dialog = QDialog(self)
+                        dialog.setWindowTitle("设置用户密码")
+                        dialog.setModal(True)
+                        
+                        layout = QFormLayout(dialog)
+                        layout.setSpacing(15)
+                        layout.setContentsMargins(20, 20, 20, 20)
+                        
+                        # 密码输入框
+                        password = QLineEdit()
+                        password.setFixedWidth(300)
+                        password.setEchoMode(QLineEdit.Password)
+                        layout.addRow("密码:", password)
+                        
+                        # 确认密码输入框
+                        confirm_password = QLineEdit()
+                        confirm_password.setFixedWidth(300)
+                        confirm_password.setEchoMode(QLineEdit.Password)
+                        layout.addRow("确认密码:", confirm_password)
+                        
+                        # 按钮
+                        btn_layout = QHBoxLayout()
+                        save_btn = QPushButton("确定")
+                        save_btn.setObjectName("primaryButton")
+                        save_btn.clicked.connect(dialog.accept)
+                        cancel_btn = QPushButton("取消")
+                        cancel_btn.clicked.connect(dialog.reject)
+                        btn_layout.addWidget(save_btn)
+                        btn_layout.addWidget(cancel_btn)
+                        layout.addRow("", btn_layout)
+                        
+                        if dialog.exec() == QDialog.Accepted:
+                            if not password.text():
+                                raise Exception("请输入密码")
+                                
+                            if password.text() != confirm_password.text():
+                                raise Exception("两次输入的密码不一致")
+                                
+                            # 设置密码（使用User模型中的加密方法）
+                            user.set_password(password.text())
+                            session.add(user)
+                            logger.info(f"创建新用户: {login_name}")
+                        else:
+                            logger.info(f"用户取消创建: {login_name}")
+                            continue  # 跳过当前用户的创建，继续处理下一个用户
+                    else:
+                        # 更新用户信息
+                        user.name = name
+                        user.role = user_role
+                        user.is_admin = is_admin
+                        user.is_active = is_active
+                        user.wecom_code = wecom_code if wecom_code != login_name else None
+                        logger.info(f"更新用户信息: {login_name}")
                     
                     # 更新企业关联信息
                     if corp and user_role != UserRole.ROOT_ADMIN.value:
@@ -1050,12 +1270,13 @@ class SettingsPage(QWidget):
                         user.corpid = None
                         user.corpsecret = None
                         user.agentid = None
-                    
+                
                 session.commit()
                 
         except Exception as e:
-            raise Exception(f"保存用户管理设置失败: {str(e)}")
-            
+            logger.error(f"保存用户信息失败: {str(e)}", exc_info=True)
+            raise
+
     def reset_settings(self):
         """重置设置"""
         try:
@@ -1176,32 +1397,88 @@ class SettingsPage(QWidget):
         Returns:
             是否验证通过
         """
-        # 验证企业信息
-        if not self.corp_name.text():
-            ErrorHandler.handle_warning("请输入企业名称", self)
+        # 验证企业信息表格
+        if self.corp_table.rowCount() == 0:
+            ErrorHandler.handle_warning("请至少添加一个企业", self)
+            return False
+        
+        for row in range(self.corp_table.rowCount()):
+            # 检查所有必需的单元格是否存在
+            name_item = self.corp_table.item(row, 0)
+            id_item = self.corp_table.item(row, 1)
+            agent_id_item = self.corp_table.item(row, 3)
+            status_item = self.corp_table.item(row, 4)
+            
+            if not all([name_item, id_item, agent_id_item, status_item]):
+                ErrorHandler.handle_warning(
+                    f"第{row + 1}行企业数据不完整，请检查企业名称、企业ID、应用ID和状态是否都已填写",
+                    self
+                )
+                return False
+                
+        # 验证用户表格
+        if self.user_table.rowCount() == 0:
+            ErrorHandler.handle_warning("请至少添加一个用户", self)
             return False
             
-        if not self.corp_id.text():
-            ErrorHandler.handle_warning("请输入企业ID", self)
-            return False
+        for row in range(self.user_table.rowCount()):
+            # 检查所有必需的单元格是否存在
+            login_name_item = self.user_table.item(row, 0)
+            name_item = self.user_table.item(row, 1)
+            role_item = self.user_table.item(row, 2)
+            corp_name_item = self.user_table.item(row, 3)
+            is_admin_item = self.user_table.item(row, 4)
+            status_item = self.user_table.item(row, 5)
             
-        if not self.corp_secret.text():
-            ErrorHandler.handle_warning("请输入企业应用Secret", self)
+            if not all([login_name_item, name_item, role_item, corp_name_item, 
+                       is_admin_item, status_item]):
+                ErrorHandler.handle_warning(
+                    f"第{row + 1}行用户数据不完整，请检查所有字段是否都已填写",
+                    self
+                )
+                return False
+                
+            # 验证用户数据
+            if not self._validate_user_data(
+                login_name_item.text(),
+                name_item.text(),
+                wecom_code=self.user_table.item(row, 6).text() if self.user_table.item(row, 6) else None
+            ):
+                return False
+                
+        # 验证主题设置
+        if not hasattr(self, 'theme_combo') or not self.theme_combo or not self.theme_combo.currentText():
+            ErrorHandler.handle_warning("请选择主题设置", self)
             return False
-            
-        if not self.agent_id.text():
-            ErrorHandler.handle_warning("请输入应用ID", self)
-            return False
-            
+        
         # 验证路径
-        if not self.db_path.text():
+        if not hasattr(self, 'db_path') or not self.db_path or not self.db_path.text():
             ErrorHandler.handle_warning("请选择数据库路径", self)
             return False
-            
-        if not self.log_path.text():
+        
+        if not hasattr(self, 'log_path') or not self.log_path or not self.log_path.text():
             ErrorHandler.handle_warning("请选择日志路径", self)
             return False
+        
+        if not hasattr(self, 'backup_path') or not self.backup_path or not self.backup_path.text():
+            ErrorHandler.handle_warning("请选择备份文件路径", self)
+            return False
+        
+        # 验证数据清理设置
+        if hasattr(self, 'data_cleanup') and self.data_cleanup and self.data_cleanup.isChecked():
+            if not hasattr(self, 'cleanup_period') or not self.cleanup_period or self.cleanup_period.value() <= 0:
+                ErrorHandler.handle_warning("数据清理周期必须大于0天", self)
+                return False
             
+            if not hasattr(self, 'cleanup_scope') or not self.cleanup_scope or not self.cleanup_scope.currentText():
+                ErrorHandler.handle_warning("请选择数据清理范围", self)
+                return False
+            
+        # 验证日志级别
+        if not hasattr(self, 'log_level') or not self.log_level or not self.log_level.currentText():
+            ErrorHandler.handle_warning("请选择日志级别", self)
+            return False
+        
         return True
 
     def add_corp(self):
@@ -1276,6 +1553,76 @@ class SettingsPage(QWidget):
             except Exception as e:
                 self.error_handler.handle_error(e, self, "添加企业失败")
                 
+    def _validate_user_data(self, login_name: str, name: str, password: str = None, wecom_code: str = None) -> bool:
+        """验证用户数据
+        
+        Args:
+            login_name: 登录名
+            name: 用户名
+            password: 密码（可选，仅在创建用户或重置密码时需要）
+            wecom_code: 企业微信账号（可选）
+            
+        Returns:
+            bool: 是否验证通过
+        """
+        import re
+        
+        # 验证登录名
+        if not login_name:
+            self.error_handler.handle_warning("登录名不能为空", self)
+            return False
+            
+        if len(login_name) < 3 or len(login_name) > 20:
+            self.error_handler.handle_warning("登录名长度必须在3-20个字符之间", self)
+            return False
+            
+        if not re.match(r'^[a-zA-Z0-9_-]+$', login_name):
+            self.error_handler.handle_warning("登录名只能包含字母、数字、下划线和连字符", self)
+            return False
+            
+        # 验证用户名
+        if not name:
+            self.error_handler.handle_warning("用户名不能为空", self)
+            return False
+            
+        if len(name) < 2 or len(name) > 50:
+            self.error_handler.handle_warning("用户名长度必须在2-50个字符之间", self)
+            return False
+            
+        # 验证密码（如果提供）
+        if password is not None:
+            if len(password) < 8:
+                self.error_handler.handle_warning("密码长度不能少于8个字符", self)
+                return False
+                
+            if not re.search(r'[A-Z]', password):
+                self.error_handler.handle_warning("密码必须包含至少一个大写字母", self)
+                return False
+                
+            if not re.search(r'[a-z]', password):
+                self.error_handler.handle_warning("密码必须包含至少一个小写字母", self)
+                return False
+                
+            if not re.search(r'[0-9]', password):
+                self.error_handler.handle_warning("密码必须包含至少一个数字", self)
+                return False
+                
+            if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+                self.error_handler.handle_warning("密码必须包含至少一个特殊字符", self)
+                return False
+                
+        # 验证企业微信账号（如果提供）
+        if wecom_code:
+            if len(wecom_code) > 64:
+                self.error_handler.handle_warning("企业微信账号长度不能超过64个字符", self)
+                return False
+                
+            if not re.match(r'^[a-zA-Z0-9_@.-]+$', wecom_code):
+                self.error_handler.handle_warning("企业微信账号格式不正确", self)
+                return False
+                
+        return True
+
     def add_user(self):
         """添加新用户"""
         dialog = QDialog(self)
@@ -1348,13 +1695,18 @@ class SettingsPage(QWidget):
         
         if dialog.exec() == QDialog.Accepted:
             try:
-                # 验证密码
+                # 验证密码一致性
                 if password.text() != confirm_password.text():
                     self.error_handler.handle_warning("两次输入的密码不一致", self)
                     return
                     
-                if not password.text():
-                    self.error_handler.handle_warning("请输入密码", self)
+                # 验证用户数据
+                if not self._validate_user_data(
+                    login_name.text(),
+                    name.text(),
+                    password.text(),
+                    wecom_code.text()
+                ):
                     return
                     
                 with self.db_manager.get_session() as session:
@@ -1604,6 +1956,14 @@ class SettingsPage(QWidget):
                 layout.addRow("", btn_layout)
                 
                 if dialog.exec() == QDialog.Accepted:
+                    # 验证用户数据
+                    if not self._validate_user_data(
+                        login_name_edit.text(),
+                        name.text(),
+                        wecom_code=wecom_code.text()
+                    ):
+                        return
+                    
                     # 检查用户名是否重复
                     if login_name_edit.text() != user.login_name and \
                             session.query(User).filter_by(login_name=login_name_edit.text()).first():
@@ -1686,13 +2046,13 @@ class SettingsPage(QWidget):
                 layout.addRow("", btn_layout)
                 
                 if dialog.exec() == QDialog.Accepted:
-                    # 验证密码
+                    # 验证密码一致性
                     if new_password.text() != confirm_password.text():
                         self.error_handler.handle_warning("两次输入的密码不一致", self)
                         return
                         
-                    if not new_password.text():
-                        self.error_handler.handle_warning("请输入新密码", self)
+                    # 验证密码强度
+                    if not self._validate_user_data(user.login_name, user.name, new_password.text()):
                         return
                         
                     # 更新密码
@@ -1828,41 +2188,42 @@ class SettingsPage(QWidget):
         try:
             # 1. 首先尝试从数据库获取配置
             with self.db_manager.get_session() as session:
-                settings = session.query(Settings).first()
+                settings = {s.name: s.value for s in session.query(Settings).filter_by(type="system").all()}
                 if settings:
                     logger.info("从数据库加载系统设置")
                     # 主题设置
                     theme_map = {"light": "浅色", "dark": "深色", "system": "跟随系统"}
-                    current_theme = settings.theme or "system"
+                    current_theme = settings.get("theme", "system")
                     self.theme_combo.setCurrentText(theme_map.get(current_theme, "跟随系统"))
                     
                     # 数据库路径
-                    if settings.db_path:
-                        self.db_path.setText(settings.db_path)
+                    if "db_path" in settings:
+                        self.db_path.setText(settings["db_path"])
                     
                     # 备份文件路径
-                    if settings.backup_path:
-                        self.backup_path.setText(settings.backup_path)
+                    if "backup_path" in settings:
+                        self.backup_path.setText(settings["backup_path"])
                     
                     # 日志设置
-                    if settings.log_path:
-                        self.log_path.setText(settings.log_path)
-                    if settings.log_level:
-                        self.log_level.setCurrentText(settings.log_level)
+                    if "log_path" in settings:
+                        self.log_path.setText(settings["log_path"])
+                    if "log_level" in settings:
+                        self.log_level.setCurrentText(settings["log_level"])
                     
                     # 数据管理设置
-                    self.data_cleanup.setChecked(settings.data_cleanup)
-                    if settings.cleanup_days:
-                        self.cleanup_period.setValue(settings.cleanup_days)
+                    if "data_cleanup" in settings:
+                        self.data_cleanup.setChecked(settings["data_cleanup"].lower() == "true")
+                    if "cleanup_days" in settings:
+                        self.cleanup_period.setValue(int(settings["cleanup_days"]))
                     
                     cleanup_scope_map = {
                         "all": "全部数据",
                         "logs": "仅日志",
                         "temp": "仅临时文件"
                     }
-                    if settings.cleanup_scope:
+                    if "cleanup_scope" in settings:
                         self.cleanup_scope.setCurrentText(
-                            cleanup_scope_map.get(settings.cleanup_scope, "全部数据")
+                            cleanup_scope_map.get(settings["cleanup_scope"], "全部数据")
                         )
                     return
 
@@ -1925,153 +2286,341 @@ class SettingsPage(QWidget):
         """保存系统设置"""
         try:
             with self.db_manager.get_session() as session:
-                # 获取或创建设置对象
-                settings = session.query(Settings).first()
-                if not settings:
-                    settings = Settings()
-                    session.add(settings)
+                # 定义系统设置项及其验证规则
+                settings_items = {
+                    "theme": {
+                        "value": {
+                            "跟随系统": "system",
+                            "明亮": "light",
+                            "暗色": "dark"
+                        }.get(self.theme_combo.currentText(), "system"),
+                        "type": "system",
+                        "description": "系统主题设置",
+                        "required": True,
+                        "validation": lambda x: x in ["system", "light", "dark"]
+                    },
+                    "db_path": {
+                        "value": self.db_path.text(),
+                        "type": "system",
+                        "description": "数据库路径",
+                        "required": True,
+                        "validation": lambda x: bool(x and os.path.exists(os.path.dirname(x)))
+                    },
+                    "backup_path": {
+                        "value": self.backup_path.text(),
+                        "type": "system",
+                        "description": "备份文件路径",
+                        "required": True,
+                        "validation": lambda x: bool(x)
+                    },
+                    "log_path": {
+                        "value": self.log_path.text(),
+                        "type": "system",
+                        "description": "日志路径",
+                        "required": True,
+                        "validation": lambda x: bool(x)
+                    },
+                    "log_level": {
+                        "value": self.log_level.currentText(),
+                        "type": "system",
+                        "description": "日志级别",
+                        "required": True,
+                        "validation": lambda x: x in ["DEBUG", "INFO", "WARNING", "ERROR"]
+                    },
+                    "data_cleanup": {
+                        "value": str(self.data_cleanup.isChecked()).lower(),
+                        "type": "system",
+                        "description": "是否启用数据清理",
+                        "required": True,
+                        "validation": lambda x: x in ["true", "false"]
+                    },
+                    "cleanup_days": {
+                        "value": str(self.cleanup_period.value()),
+                        "type": "system",
+                        "description": "清理周期(天)",
+                        "required": True,
+                        "validation": lambda x: x.isdigit() and 1 <= int(x) <= 365
+                    },
+                    "cleanup_scope": {
+                        "value": {
+                            "全部数据": "all",
+                            "仅日志": "logs",
+                            "仅临时文件": "temp"
+                        }.get(self.cleanup_scope.currentText(), "all"),
+                        "type": "system",
+                        "description": "清理范围",
+                        "required": True,
+                        "validation": lambda x: x in ["all", "logs", "temp"]
+                    }
+                }
+                
+                # 验证所有必需的设置项
+                for name, data in settings_items.items():
+                    if data.get("required", False):
+                        if not data["value"]:
+                            raise ValueError(f"设置项 {name} 不能为空")
+                        if not data["validation"](data["value"]):
+                            raise ValueError(f"设置项 {name} 的值无效")
                 
                 # 获取旧的路径配置
-                old_db_path = settings.db_path
-                old_backup_path = settings.backup_path
-                old_log_path = settings.log_path
+                old_settings = {}
+                for setting in session.query(Settings).filter_by(type="system").all():
+                    old_settings[setting.name] = setting.value
                 
-                # 主题设置
-                theme_map = {
-                    "跟随系统": "system",
-                    "明亮": "light",
-                    "暗色": "dark"
-                }
-                settings.theme = theme_map.get(self.theme_combo.currentText(), "system")
-                
-                # 路径设置
-                settings.db_path = self.db_path.text()
-                settings.backup_path = self.backup_path.text()
-                settings.log_path = self.log_path.text()
-                
-                # 日志设置
-                settings.log_level = self.log_level.currentText()
-                
-                # 数据管理设置
-                settings.data_cleanup = self.data_cleanup.isChecked()
-                settings.cleanup_days = self.cleanup_period.value()
-                
-                cleanup_scope_map = {
-                    "全部数据": "all",
-                    "仅日志": "logs",
-                    "仅临时文件": "temp"
-                }
-                settings.cleanup_scope = cleanup_scope_map.get(
-                    self.cleanup_scope.currentText(), "all"
-                )
-                
-                # 迁移文件
+                # 开始事务
                 try:
-                    # 创建新的目录
-                    os.makedirs(os.path.dirname(settings.db_path), exist_ok=True)
-                    os.makedirs(settings.backup_path, exist_ok=True)
-                    os.makedirs(settings.log_path, exist_ok=True)
+                    # 记录开始保存的时间
+                    save_start_time = datetime.now()
                     
-                    # 迁移数据库文件
-                    if old_db_path and os.path.exists(old_db_path) and old_db_path != settings.db_path:
-                        shutil.copy2(old_db_path, settings.db_path)
-                        logger.info(f"数据库文件已从 {old_db_path} 迁移到 {settings.db_path}")
+                    # 更新或创建设置项
+                    updated_settings = []
+                    for name, data in settings_items.items():
+                        setting = session.query(Settings).filter_by(name=name).first()
+                        if not setting:
+                            setting = Settings(
+                                name=name,
+                                value=data["value"],
+                                type=data["type"],
+                                description=data["description"],
+                                created_at=save_start_time,
+                                updated_at=save_start_time
+                            )
+                            session.add(setting)
+                        else:
+                            # 记录变更
+                            if setting.value != data["value"]:
+                                logger.info(f"设置项 {name} 的值从 {setting.value} 变更为 {data['value']}")
+                            setting.value = data["value"]
+                            setting.type = data["type"]
+                            setting.description = data["description"]
+                            setting.updated_at = save_start_time
+                        
+                        updated_settings.append(setting)
                     
-                    # 迁移备份文件
-                    if old_backup_path and os.path.exists(old_backup_path) and old_backup_path != settings.backup_path:
-                        for item in os.listdir(old_backup_path):
-                            s = os.path.join(old_backup_path, item)
-                            d = os.path.join(settings.backup_path, item)
-                            if os.path.isfile(s):
-                                shutil.copy2(s, d)
-                            else:
-                                shutil.copytree(s, d, dirs_exist_ok=True)
-                        logger.info(f"备份文件已从 {old_backup_path} 迁移到 {settings.backup_path}")
+                    # 记录配置变更
+                    self._log_config_change(updated_settings)
                     
-                    # 迁移日志文件
-                    if old_log_path and os.path.exists(old_log_path) and old_log_path != settings.log_path:
-                        for item in os.listdir(old_log_path):
-                            if item.endswith('.log'):
-                                s = os.path.join(old_log_path, item)
-                                d = os.path.join(settings.log_path, item)
-                                shutil.copy2(s, d)
-                        logger.info(f"日志文件已从 {old_log_path} 迁移到 {settings.log_path}")
+                    # 迁移文件
+                    self._migrate_files(
+                        old_settings.get("db_path"),
+                        old_settings.get("backup_path"),
+                        old_settings.get("log_path"),
+                        settings_items
+                    )
+                    
+                    # 创建配置备份
+                    self._create_config_backup(settings_items)
+                    
+                    # 更新配置文件
+                    self._update_config_file(settings_items)
+                    
+                    # 提交事务
+                    session.commit()
+                    
+                    # 记录保存完成时间
+                    save_end_time = datetime.now()
+                    save_duration = (save_end_time - save_start_time).total_seconds()
+                    logger.info(f"系统设置保存完成，耗时: {save_duration:.2f}秒")
                     
                 except Exception as e:
-                    logger.error(f"文件迁移失败: {str(e)}")
-                    raise Exception(f"文件迁移失败: {str(e)}")
-                
-                session.commit()
-                
-                # 更新配置文件
-                # 1. 获取当前配置
-                config = self.config_manager.get_config()
-                if not config:
-                    config = {}
-                
-                # 2. 更新系统配置
-                if "system" not in config:
-                    config["system"] = {}
-                
-                # 只更新用户相关的配置项
-                config["system"].update({
-                    "theme": settings.theme,
-                    "log_level": settings.log_level,
-                    "log_retention": 30,  # 默认值
-                    "backup_retention": 30,  # 默认值
-                    "auto_cleanup": settings.data_cleanup,
-                    "cleanup_days": settings.cleanup_days
-                })
-                
-                # 3. 更新路径配置
-                if "paths" not in config:
-                    config["paths"] = {}
-                
-                config["paths"].update({
-                    "data": settings.db_path,
-                    "log": settings.log_path,
-                    "backup": settings.backup_path
-                })
-                
-                # 4. 更新数据库配置
-                if "database" not in config:
-                    config["database"] = {}
-                
-                config["database"].update({
-                    "path": settings.db_path,
-                    "backup_path": settings.backup_path
-                })
-                
-                # 5. 保存配置
-                self.config_manager.save_config(config)
-                
-                # 6. 询问是否删除旧文件
-                if any([
-                    old_db_path and os.path.exists(old_db_path) and old_db_path != settings.db_path,
-                    old_backup_path and os.path.exists(old_backup_path) and old_backup_path != settings.backup_path,
-                    old_log_path and os.path.exists(old_log_path) and old_log_path != settings.log_path
-                ]):
-                    if ErrorHandler.handle_question(
-                        "文件已迁移到新位置，是否删除旧文件？",
-                        self,
-                        "删除确认"
-                    ):
-                        try:
-                            # 删除旧文件
-                            if old_db_path and os.path.exists(old_db_path) and old_db_path != settings.db_path:
-                                os.remove(old_db_path)
-                            
-                            if old_backup_path and os.path.exists(old_backup_path) and old_backup_path != settings.backup_path:
-                                shutil.rmtree(old_backup_path)
-                            
-                            if old_log_path and os.path.exists(old_log_path) and old_log_path != settings.log_path:
-                                shutil.rmtree(old_log_path)
-                                
-                            logger.info("旧文件已删除")
-                            
-                        except Exception as e:
-                            logger.error(f"删除旧文件失败: {str(e)}")
-                            ErrorHandler.handle_error(f"删除旧文件失败: {str(e)}", self)
+                    session.rollback()
+                    logger.error(f"保存系统设置失败: {str(e)}", exc_info=True)
+                    raise Exception(f"保存系统设置失败: {str(e)}")
                 
         except Exception as e:
-            raise Exception(f"保存系统设置失败: {str(e)}")
+            logger.error(f"保存系统设置失败: {str(e)}", exc_info=True)
+            raise
+            
+    def _update_config_file(self, settings: dict):
+        """更新配置文件
+        
+        Args:
+            settings: 设置字典
+        """
+        try:
+            # 获取当前配置
+            config = self.config_manager.get_config()
+            if not config:
+                config = {}
+                
+            # 更新系统配置
+            if "system" not in config:
+                config["system"] = {}
+                
+            # 更新路径配置
+            if "paths" not in config:
+                config["paths"] = {}
+                
+            # 更新数据库配置
+            if "database" not in config:
+                config["database"] = {}
+                
+            # 更新系统设置
+            config["system"].update({
+                "theme": settings["theme"]["value"],
+                "log_level": settings["log_level"]["value"],
+                "log_retention": int(settings["cleanup_days"]["value"]),
+                "backup_retention": int(settings["cleanup_days"]["value"])
+            })
+            
+            # 更新路径配置
+            config["paths"].update({
+                "config": os.path.dirname(self.config_manager.config_file),
+                "data": os.path.dirname(settings["db_path"]["value"]),
+                "log": settings["log_path"]["value"],
+                "backup": settings["backup_path"]["value"]
+            })
+            
+            # 更新数据库配置
+            config["database"].update({
+                "path": settings["db_path"]["value"],
+                "backup_path": settings["backup_path"]["value"]
+            })
+            
+            # 更新配置管理器的配置
+            self.config_manager.config = config
+            # 保存配置
+            self.config_manager.save_config()
+            
+        except Exception as e:
+            logger.error(f"更新配置文件失败: {str(e)}", exc_info=True)
+            raise Exception(f"更新配置文件失败: {str(e)}")
+        
+    def _log_config_change(self, settings: list):
+        """记录配置变更
+        
+        Args:
+            settings: 设置对象列表
+        """
+        try:
+            with self.db_manager.get_session() as session:
+                # 获取当前用户
+                current_user = self.auth_manager.get_current_user()
+                if not current_user:
+                    logger.error("无法找到当前用户")
+                    return
+                    
+                # 在当前会话中查询用户对象
+                user = session.query(User).filter_by(login_name=current_user.login_name).first()
+                if not user:
+                    logger.error("无法找到当前用户")
+                    return
+                    
+                # 记录每个配置的变更
+                for setting in settings:
+                    # 使用 ConfigManager 记录配置变更
+                    self.config_manager._record_config_change(
+                        user=user,
+                        change_type="system",
+                        details={
+                            "name": setting.name,
+                            "old_value": setting.value,
+                            "new_value": setting.value,
+                            "ip_address": self._get_client_ip()
+                        }
+                    )
+                
+                logger.info("配置变更记录成功")
+                
+        except Exception as e:
+            logger.error(f"记录配置变更失败: {str(e)}")
+            if 'session' in locals():
+                session.rollback()
+        
+    def _create_config_backup(self, settings: dict):
+        """创建配置备份
+        
+        Args:
+            settings: 设置字典
+        """
+        try:
+            backup_path = settings.get("backup_path", {}).get("value", "")
+            if not backup_path:
+                raise Exception("备份路径未配置")
+            
+            # 创建备份目录
+            backup_dir = os.path.join(backup_path, "config")
+            os.makedirs(backup_dir, exist_ok=True)
+            
+            # 生成备份文件名
+            version = "1.0.0"  # 设置默认版本号
+            backup_file = os.path.join(
+                backup_dir,
+                f"config_backup_v{version}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            
+            # 准备备份数据
+            backup_data = {
+                "version": version,
+                "theme": settings.get("theme", {}).get("value", "system"),
+                "db_path": settings.get("db_path", {}).get("value", ""),
+                "backup_path": backup_path,
+                "log_path": settings.get("log_path", {}).get("value", ""),
+                "log_level": settings.get("log_level", {}).get("value", "INFO"),
+                "data_cleanup": settings.get("data_cleanup", {}).get("value", "true"),
+                "cleanup_days": settings.get("cleanup_days", {}).get("value", "30"),
+                "cleanup_scope": settings.get("cleanup_scope", {}).get("value", "all"),
+                "backup_time": datetime.now().isoformat()
+            }
+            
+            # 保存备份文件
+            with open(backup_file, 'w', encoding='utf-8') as f:
+                json.dump(backup_data, f, ensure_ascii=False, indent=2)
+                
+            logger.info(f"配置备份已创建: {backup_file}")
+            
+        except Exception as e:
+            logger.error(f"创建配置备份失败: {str(e)}", exc_info=True)
+            raise Exception(f"创建配置备份失败: {str(e)}")
+        
+    def _migrate_files(self, old_db_path: str, old_backup_path: str, old_log_path: str, settings: dict):
+        """迁移文件
+        
+        Args:
+            old_db_path: 旧数据库路径
+            old_backup_path: 旧备份路径
+            old_log_path: 旧日志路径
+            settings: 设置字典
+        """
+        try:
+            # 获取新路径
+            new_db_path = settings.get("db_path", {}).get("value", "")
+            new_backup_path = settings.get("backup_path", {}).get("value", "")
+            new_log_path = settings.get("log_path", {}).get("value", "")
+            
+            if not all([new_db_path, new_backup_path, new_log_path]):
+                raise Exception("新路径配置不完整")
+            
+            # 创建新的目录
+            os.makedirs(os.path.dirname(new_db_path), exist_ok=True)
+            os.makedirs(new_backup_path, exist_ok=True)
+            os.makedirs(new_log_path, exist_ok=True)
+            
+            # 迁移数据库文件
+            if old_db_path and os.path.exists(old_db_path) and old_db_path != new_db_path:
+                shutil.copy2(old_db_path, new_db_path)
+                logger.info(f"数据库文件已从 {old_db_path} 迁移到 {new_db_path}")
+            
+            # 迁移备份文件
+            if old_backup_path and os.path.exists(old_backup_path) and old_backup_path != new_backup_path:
+                for item in os.listdir(old_backup_path):
+                    s = os.path.join(old_backup_path, item)
+                    d = os.path.join(new_backup_path, item)
+                    if os.path.isfile(s):
+                        shutil.copy2(s, d)
+                    else:
+                        shutil.copytree(s, d, dirs_exist_ok=True)
+                logger.info(f"备份文件已从 {old_backup_path} 迁移到 {new_backup_path}")
+            
+            # 迁移日志文件
+            if old_log_path and os.path.exists(old_log_path) and old_log_path != new_log_path:
+                for item in os.listdir(old_log_path):
+                    if item.endswith('.log'):
+                        s = os.path.join(old_log_path, item)
+                        d = os.path.join(new_log_path, item)
+                        shutil.copy2(s, d)
+                logger.info(f"日志文件已从 {old_log_path} 迁移到 {new_log_path}")
+                
+        except Exception as e:
+            logger.error(f"文件迁移失败: {str(e)}", exc_info=True)
+            raise Exception(f"文件迁移失败: {str(e)}")
