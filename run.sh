@@ -280,16 +280,28 @@ install_package() {
 }
 
 # 检查是否在虚拟环境中
+# 检查并退出虚拟环境，如果遇到问题则继续使用当前环境
 check_venv() {
+    # 判断是否在虚拟环境中
     if [ -n "$VIRTUAL_ENV" ]; then
         print_warn "检测到当前在虚拟环境中: $VIRTUAL_ENV"
         print_info "正在退出虚拟环境..."
-        deactivate
-        if [ $? -eq 0 ]; then
-            print_info "已成功退出虚拟环境"
-            return 0
+
+        # 尝试执行 deactivate
+        if command -v deactivate >/dev/null 2>&1; then
+            # 如果 deactivate 命令存在，则执行它
+            deactivate
+            if [ $? -eq 0 ]; then
+                print_info "已成功退出虚拟环境"
+                return 0
+            else
+                print_error "退出虚拟环境失败"
+                # 即使退出失败，也允许继续执行
+                return 1
+            fi
         else
-            print_error "退出虚拟环境失败"
+            # 如果 deactivate 命令不存在，打印警告信息后继续
+            print_warn "无法找到 'deactivate' 命令，无法自动退出虚拟环境。"
             return 1
         fi
     else

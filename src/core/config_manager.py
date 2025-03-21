@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, Optional
 from ..utils.logger import get_logger
-from ..models.user import UserRole
+from ..models.user import UserRole, User
 from ..config.database import get_default_paths
 from .database import get_db_connection_config
 
@@ -534,33 +534,37 @@ class ConfigManager:
             from ..core.database import DatabaseManager
             
             db_manager = DatabaseManager()
-            session = db_manager.Session()
-            try:
-                # 确保用户对象绑定到会话
-                user = session.merge(self.current_user)
-                
-                # 创建配置变更记录
-                change = ConfigChange(
-                    user_id=user.userid,
-                    change_type=change_type,
-                    change_content=details,
-                    change_time=datetime.now(),
-                    ip_address=self._get_client_ip()
-                )
-                # 设置关联关系
-                change.user = user
-                
-                session.add(change)
-                session.commit()
-                self.logger.info(f"配置变更记录成功: {change_type}")
-            except Exception as e:
-                session.rollback()
-                self.logger.error(f"记录配置变更失败: {str(e)}")
-            finally:
-                session.close()
-                
+            with db_manager.get_session() as session:
+                try:
+                    # 在新会话中查询用户
+                    user = session.query(User).filter_by(userid=self.current_user.userid).first()
+                    if not user:
+                        self.logger.warning(f"未找到用户: {self.current_user.userid}")
+                        return
+                    
+                    # 创建配置变更记录
+                    change = ConfigChange(
+                        user_id=user.userid,
+                        change_type=change_type,
+                        change_content=details,
+                        change_time=datetime.now(),
+                        ip_address=self._get_client_ip()
+                    )
+                    # 设置关联关系
+                    change.user = user
+                    
+                    session.add(change)
+                    session.commit()
+                    self.logger.info(f"配置变更记录成功: {change_type}")
+                    
+                except Exception as e:
+                    session.rollback()
+                    self.logger.error(f"记录配置变更失败: {str(e)}")
+                    raise
+                    
         except Exception as e:
             self.logger.error(f"记录配置变更失败: {str(e)}")
+            raise
 
     def _record_operation_log(self, operation: str, details: str):
         """记录操作日志
@@ -598,11 +602,11 @@ class ConfigManager:
                 self.logger.info(f"操作日志记录成功: {operation}")
             except Exception as e:
                 session.rollback()
-                self.logger.error(f"记录操作日志失败: {str(e)}")
+                self.logger.error(f"记录操作日志失败2: {str(e)}")
             finally:
                 session.close()
         except Exception as e:
-            self.logger.error(f"记录操作日志失败: {str(e)}")
+            self.logger.error(f"记录操作日志失败3: {str(e)}")
 
     def set_current_user(self, user):
         """设置当前用户

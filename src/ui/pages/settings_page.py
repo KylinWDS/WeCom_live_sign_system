@@ -479,18 +479,21 @@ class SettingsPage(QWidget):
                 
             # 使用新的会话查询用户
             with self.db_manager.get_session() as session:
-                user = session.query(User).filter_by(login_name=current_user.login_name).first()
-                if not user:
-                    logger.warning(f"未找到用户: {current_user.login_name}")
-                    return
+                try:
+                    # 直接使用 merge 处理当前用户对象
+                    user = session.merge(current_user)
                     
-                if user.role != UserRole.SUPER_ADMIN:
-                    logger.warning(f"用户 {user.login_name} 不是超级管理员，禁用设置页面")
-                    self._log_operation("访问设置页面", "无权限访问")
-                    self.setEnabled(False)
-                    QMessageBox.warning(self, "警告", "只有超级管理员可以访问设置页面")
-                else:
-                    self._log_operation("访问设置页面", "成功访问")
+                    if user.role != UserRole.ROOT_ADMIN.value:
+                        logger.warning(f"用户 {user.login_name} 不是超级管理员，禁用设置页面")
+                        self._log_operation("访问设置页面", "无权限访问")
+                        self.setEnabled(False)
+                        QMessageBox.warning(self, "警告", "只有超级管理员可以访问设置页面")
+                    else:
+                        self._log_operation("访问设置页面", "成功访问")
+                        
+                except Exception as e:
+                    logger.error(f"更新UI权限失败: {str(e)}")
+                    session.rollback()
                     
         except Exception as e:
             logger.error(f"更新UI权限失败: {str(e)}")
@@ -502,6 +505,7 @@ class SettingsPage(QWidget):
             operation_type: 操作类型
             description: 操作描述
         """
+        logger.info(operation_type, description)
         try:
             with self.db_manager.get_session() as session:
                 # 获取当前用户
@@ -510,30 +514,32 @@ class SettingsPage(QWidget):
                     logger.warning("未找到当前用户")
                     return
                     
-                # 在当前会话中查询用户对象
-                user = session.query(User).filter_by(login_name=current_user.login_name).first()
-                if not user:
-                    logger.warning(f"未找到用户: {current_user.login_name}")
-                    return
+                try:
+                    # 直接使用 merge 处理当前用户对象
+                    user = session.merge(current_user)
                     
-                # 创建操作日志
-                log = OperationLog(
-                    user_id=user.userid,
-                    operation_type=operation_type,
-                    operation_desc=description,
-                    operation_time=datetime.now(),
-                    ip_address=self._get_client_ip()
-                )
-                # 设置关联关系
-                log.user = user
-                session.add(log)
-                session.commit()
-                logger.info(f"操作日志记录成功: {operation_type}")
-                
+                    # 创建操作日志
+                    log = OperationLog(
+                        user_id=user.userid,
+                        operation_type=operation_type,
+                        operation_desc=description,
+                        operation_time=datetime.now(),
+                        ip_address=self._get_client_ip()
+                    )
+                    
+                    # 设置关联关系
+                    log.user = user
+                    
+                    session.add(log)
+                    session.commit()
+                    logger.info(f"操作日志记录成功: {operation_type}")
+                    
+                except Exception as e:
+                    session.rollback()
+                    logger.error(f"记录操作日志失败: {str(e)}")
+                    
         except Exception as e:
             logger.error(f"记录操作日志失败: {str(e)}")
-            if 'session' in locals():
-                session.rollback()
         
     def _get_client_ip(self) -> str:
         """获取客户端IP地址
@@ -2286,6 +2292,7 @@ class SettingsPage(QWidget):
         """保存系统设置"""
         try:
             with self.db_manager.get_session() as session:
+                logger.info("开始保存系统设置...")
                 # 定义系统设置项及其验证规则
                 settings_items = {
                     "theme": {
@@ -2354,6 +2361,7 @@ class SettingsPage(QWidget):
                     }
                 }
                 
+                logger.info("验证设置项...")
                 # 验证所有必需的设置项
                 for name, data in settings_items.items():
                     if data.get("required", False):
@@ -2367,70 +2375,86 @@ class SettingsPage(QWidget):
                 for setting in session.query(Settings).filter_by(type="system").all():
                     old_settings[setting.name] = setting.value
                 
-                # 开始事务
+                logger.info("开始更新设置项...")
+                # 记录开始保存的时间
+                save_start_time = datetime.now()
+                
+                # 更新或创建设置项
+                updated_settings = []
+                for name, data in settings_items.items():
+                    setting = session.query(Settings).filter_by(name=name).first()
+                    if not setting:
+                        setting = Settings(
+                            name=name,
+                            value=data["value"],
+                            type=data["type"],
+                            description=data["description"],
+                            created_at=save_start_time,
+                            updated_at=save_start_time
+                        )
+                        session.add(setting)
+                        logger.info(f"创建新设置项: {name}")
+                    else:
+                        # 记录变更
+                        if setting.value != data["value"]:
+                            logger.info(f"更新设置项 {name}: {setting.value} -> {data['value']}")
+                        setting.value = data["value"]
+                        setting.type = data["type"]
+                        setting.description = data["description"]
+                        setting.updated_at = save_start_time
+                    
+                    updated_settings.append(setting)
+                
+                # 添加调试信息
+                logger.info(f"准备记录配置变更，设置项数量: {len(updated_settings)}")
+                for setting in updated_settings:
+                    logger.info(f"设置项: {setting.name} = {setting.value}")
+                
+                # 确保 self._log_config_change 存在
+                if not hasattr(self, '_log_config_change'):
+                    logger.error("_log_config_change 方法不存在")
+                    raise AttributeError("_log_config_change 方法不存在")
+                
+                # 直接调用方法
+                logger.info("开始调用 _log_config_change 方法...")
+                self._log_config_change(updated_settings)
+                logger.info("_log_config_change 方法调用完成")
+                
+                logger.info("开始迁移文件...")
                 try:
-                    # 记录开始保存的时间
-                    save_start_time = datetime.now()
-                    
-                    # 更新或创建设置项
-                    updated_settings = []
-                    for name, data in settings_items.items():
-                        setting = session.query(Settings).filter_by(name=name).first()
-                        if not setting:
-                            setting = Settings(
-                                name=name,
-                                value=data["value"],
-                                type=data["type"],
-                                description=data["description"],
-                                created_at=save_start_time,
-                                updated_at=save_start_time
-                            )
-                            session.add(setting)
-                        else:
-                            # 记录变更
-                            if setting.value != data["value"]:
-                                logger.info(f"设置项 {name} 的值从 {setting.value} 变更为 {data['value']}")
-                            setting.value = data["value"]
-                            setting.type = data["type"]
-                            setting.description = data["description"]
-                            setting.updated_at = save_start_time
-                        
-                        updated_settings.append(setting)
-                    
-                    # 记录配置变更
-                    self._log_config_change(updated_settings)
-                    
-                    # 迁移文件
                     self._migrate_files(
                         old_settings.get("db_path"),
                         old_settings.get("backup_path"),
                         old_settings.get("log_path"),
                         settings_items
                     )
-                    
-                    # 创建配置备份
-                    self._create_config_backup(settings_items)
-                    
-                    # 更新配置文件
-                    self._update_config_file(settings_items)
-                    
-                    # 提交事务
-                    session.commit()
-                    
-                    # 记录保存完成时间
-                    save_end_time = datetime.now()
-                    save_duration = (save_end_time - save_start_time).total_seconds()
-                    logger.info(f"系统设置保存完成，耗时: {save_duration:.2f}秒")
-                    
                 except Exception as e:
-                    session.rollback()
-                    logger.error(f"保存系统设置失败: {str(e)}", exc_info=True)
-                    raise Exception(f"保存系统设置失败: {str(e)}")
+                    logger.error(f"文件迁移失败，但继续执行其他操作: {str(e)}")
+                
+                logger.info("创建配置备份...")
+                try:
+                    self._create_config_backup(settings_items)
+                except Exception as e:
+                    logger.error(f"创建配置备份失败，但继续执行其他操作: {str(e)}")
+                
+                logger.info("更新配置文件...")
+                try:
+                    self._update_config_file(settings_items)
+                except Exception as e:
+                    logger.error(f"更新配置文件失败，但继续执行其他操作: {str(e)}")
+                
+                # 提交事务
+                session.commit()
+                
+                # 记录保存完成时间
+                save_end_time = datetime.now()
+                save_duration = (save_end_time - save_start_time).total_seconds()
+                logger.info(f"系统设置保存完成，耗时: {save_duration:.2f}秒")
                 
         except Exception as e:
             logger.error(f"保存系统设置失败: {str(e)}", exc_info=True)
-            raise
-            
+            raise Exception(f"保存系统设置失败: {str(e)}")
+        
     def _update_config_file(self, settings: dict):
         """更新配置文件
         
@@ -2500,32 +2524,75 @@ class SettingsPage(QWidget):
                     logger.error("无法找到当前用户")
                     return
                     
-                # 在当前会话中查询用户对象
-                user = session.query(User).filter_by(login_name=current_user.login_name).first()
-                if not user:
-                    logger.error("无法找到当前用户")
-                    return
+                try:
+                    # 直接使用 merge 处理当前用户对象
+                    user = session.merge(current_user)
                     
-                # 记录每个配置的变更
-                for setting in settings:
-                    # 使用 ConfigManager 记录配置变更
-                    self.config_manager._record_config_change(
-                        user=user,
-                        change_type="system",
-                        details={
-                            "name": setting.name,
-                            "old_value": setting.value,
-                            "new_value": setting.value,
-                            "ip_address": self._get_client_ip()
-                        }
-                    )
-                
-                logger.info("配置变更记录成功")
-                
+                    # 记录每个配置的变更
+                    for setting in settings:
+                        try:
+                            # 先将设置对象与当前会话绑定
+                            setting = session.merge(setting)
+                            
+                            # 在当前会话中查询设置
+                            current_setting = session.query(Settings).filter_by(name=setting.name).first()
+                            
+                            # 获取旧值
+                            old_value = current_setting.value if current_setting else None
+                            
+                            # 如果设置不存在，创建新的
+                            if not current_setting:
+                                current_setting = Settings(
+                                    name=setting.name,
+                                    value=setting.value,
+                                    type=setting.type,
+                                    description=setting.description,
+                                    created_at=datetime.now(),
+                                    updated_at=datetime.now()
+                                )
+                                session.add(current_setting)
+                            else:
+                                # 更新现有设置
+                                current_setting.value = setting.value
+                                current_setting.type = setting.type
+                                current_setting.description = setting.description
+                                current_setting.updated_at = datetime.now()
+                            
+                            # 准备变更详情
+                            change_details = {
+                                "name": setting.name,
+                                "old_value": old_value,
+                                "new_value": setting.value,
+                                "ip_address": self._get_client_ip()
+                            }
+                            
+                            # 创建配置变更记录
+                            config_change = ConfigChange(
+                                user_id=user.userid,
+                                change_type="system",
+                                change_content=json.dumps(change_details),
+                                change_time=datetime.now(),
+                                ip_address=self._get_client_ip()
+                            )
+                            session.add(config_change)
+                            logger.info(f"记录配置变更: {setting.name}")
+                            
+                        except Exception as e:
+                            logger.error(f"处理设置时出错: {str(e)}")
+                            continue
+                    
+                    # 提交事务
+                    session.commit()
+                    logger.info("配置变更记录成功")
+                    
+                except Exception as e:
+                    session.rollback()
+                    logger.error(f"记录配置变更失败: {str(e)}")
+                    raise
+                    
         except Exception as e:
             logger.error(f"记录配置变更失败: {str(e)}")
-            if 'session' in locals():
-                session.rollback()
+            raise
         
     def _create_config_backup(self, settings: dict):
         """创建配置备份

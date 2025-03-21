@@ -4,8 +4,8 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QMessageBox, QTabWidget, QStackedWidget,
     QLineEdit, QComboBox, QMenuBar, QMenu, QStatusBar
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt, QRect
+from PySide6.QtGui import QIcon, QGuiApplication
 
 # UI相关导入
 from ..managers.style import StyleManager
@@ -41,7 +41,18 @@ class MainWindow(QMainWindow):
     def __init__(self, user, config_manager, db_manager, auth_manager):
         super().__init__()
         self.setWindowTitle("企业微信直播签到系统")
-        self.setMinimumSize(1200, 800)
+        
+        # 获取屏幕尺寸
+        screen = QGuiApplication.primaryScreen().geometry()
+        width = int(screen.width() * 4 / 5)
+        height = int(screen.height() * 2 / 3)
+        
+        # 设置窗口大小
+        self.resize(width, height)
+        
+        # 将窗口移动到屏幕中央
+        self.move(int((screen.width() - width) / 2),
+                 int((screen.height() - height) / 2))
         
         # 保存管理器
         self.db_manager = db_manager
