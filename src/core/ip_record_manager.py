@@ -17,7 +17,7 @@ class IPRecordManager:
         
         Args:
             ip: IP地址
-            source: IP来源，'manual' 或 'error'
+            source: IP来源，可选值：'manual', 'error', 'history', 'infer'
             
         Returns:
             bool: 是否添加成功
@@ -28,22 +28,69 @@ class IPRecordManager:
                 logger.warning(f"无效的IP地址格式: {ip}")
                 return False
             
-            # 检查IP数量限制
-            count = self.session.query(IPRecord).filter_by(is_active=True).count()
-            if count >= 120:
-                logger.warning(f"IP记录数量已达到上限(120)，无法添加新IP: {ip}")
-                return False
+            # 如果是推荐的IP，不计入数量限制
+            if source != 'infer':
+                # 检查非推荐IP的数量限制
+                count = self.session.query(IPRecord).filter(
+                    IPRecord.is_active == True,
+                    IPRecord.source != 'infer'
+                ).count()
+                if count >= 120:
+                    logger.warning(f"IP记录数量已达到上限(120)，无法添加新IP: {ip}")
+                    return False
+            
+            # 如果是manual来源，需要特殊处理
+            if source == 'manual':
+                # 查找当前活跃的manual IP
+                current_manual = self.session.query(IPRecord).filter_by(
+                    source='manual',
+                    is_active=True
+                ).first()
+                
+                if current_manual and current_manual.ip != ip:
+                    # 如果存在不同的manual IP，将其更新为history
+                    current_manual.source = 'history'
+                    current_manual.updated_at = datetime.now()
+                    logger.info(f"将旧的manual IP {current_manual.ip} 更新为history来源")
             
             # 检查IP是否已存在
             existing = self.session.query(IPRecord).filter_by(ip=ip).first()
+            
             if existing:
-                if not existing.is_active:
-                    existing.is_active = True
+                # 如果是推荐的IP
+                if source == 'infer':
+                    # 如果记录是无效的，且原来也是infer类型，则可以重新激活
+                    if not existing.is_active and existing.source == 'infer':
+                        existing.is_active = True
+                        existing.updated_at = datetime.now()
+                        self.session.commit()
+                        return True
+                    # 其他情况（有效记录或非infer类型）不做修改
+                    return True
+                
+                # 如果现有记录是manual或error来源，不允许其他来源覆盖
+                if existing.source in ['manual', 'error']:
+                    return True
+                
+                # 如果现有记录是history来源，只允许manual和error来源覆盖
+                if existing.source == 'history' and source not in ['manual', 'error']:
+                    return True
+                    
+                # 允许manual和error覆盖infer类型
+                if existing.source == 'infer' and source in ['manual', 'error']:
                     existing.source = source
+                    existing.is_active = True
                     existing.updated_at = datetime.now()
                     self.session.commit()
+                    return True
+                
+                # 更新现有记录
+                existing.source = source
+                existing.is_active = True
+                existing.updated_at = datetime.now()
+                self.session.commit()
                 return True
-            
+
             # 添加新IP
             ip_record = IPRecord(ip=ip, source=source)
             self.session.add(ip_record)
@@ -252,4 +299,39 @@ class IPRecordManager:
             return self.session.query(IPRecord).filter(IPRecord.id.in_(record_ids)).all()
         except Exception as e:
             logger.error(f"获取IP记录失败: {str(e)}")
+            return []
+    
+    def get_ip_source(self, ip: str) -> str:
+        """获取IP地址的来源
+        
+        Args:
+            ip: IP地址
+            
+        Returns:
+            str: IP来源，可能的值：'manual', 'error', 'history', 'infer'
+        """
+        try:
+            record = self.session.query(IPRecord).filter_by(ip=ip, is_active=True).first()
+            return record.source if record else ''
+        except Exception as e:
+            logger.error(f"获取IP来源失败: {str(e)}")
+            return ''
+    
+    def get_ips_by_source(self, source: str) -> List[str]:
+        """根据来源获取IP地址列表
+        
+        Args:
+            source: IP来源，可选值：'manual', 'error', 'history', 'infer'
+            
+        Returns:
+            List[str]: IP地址列表
+        """
+        try:
+            records = self.session.query(IPRecord).filter_by(
+                source=source,
+                is_active=True
+            ).order_by(IPRecord.created_at.desc()).all()
+            return [record.ip for record in records]
+        except Exception as e:
+            logger.error(f"获取{source}来源的IP记录失败: {str(e)}")
             return [] 

@@ -66,15 +66,36 @@ class SyncManager:
     async def _sync_loop(self):
         """同步循环"""
         try:
+            error_count = 0
+            max_errors = 3  # 最大连续错误次数
+            
             while self.is_running:
-                # 同步部门数据
-                await self._sync_departments()
-                
-                # 同步用户数据
-                await self._sync_users()
-                
-                # 等待下一次同步
-                await asyncio.sleep(3600)  # 每小时同步一次
+                try:
+                    # 同步部门数据
+                    await self._sync_departments()
+                    
+                    # 同步用户数据
+                    await self._sync_users()
+                    
+                    # 重置错误计数
+                    error_count = 0
+                    
+                    # 等待下一次同步
+                    await asyncio.sleep(3600)  # 每小时同步一次
+                    
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"同步过程发生错误: {str(e)}")
+                    
+                    if error_count >= max_errors:
+                        logger.error("连续错误次数过多，停止同步")
+                        self.stop_sync()
+                        break
+                    
+                    # 错误后等待较短时间再重试
+                    await asyncio.sleep(300)  # 5分钟后重试
                 
         except asyncio.CancelledError:
             logger.info("同步任务已取消")

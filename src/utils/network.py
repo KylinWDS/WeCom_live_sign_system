@@ -16,20 +16,45 @@ class NetworkUtils:
             Optional[str]: 公网IP地址，如果获取失败则返回None
         """
         try:
-            # 尝试从多个服务获取IP
+            # 尝试从多个国内服务获取IP
             services = [
-                'https://api.ipify.org?format=json',
-                'https://api.myip.com',
-                'https://ip.seeip.org/json'
+                'https://whois.pconline.com.cn/ipJson.jsp',  # 太平洋电脑网
+                'https://myip.ipip.net',  # ipip.net
+                'https://ip.cn/api/index?ip=&type=0',  # ip.cn
+                'https://ip.useragentinfo.com/json',  # useragentinfo
+                'https://ip.taobao.com/service/getIpInfo.php?ip=myip'  # 淘宝IP库
             ]
             
             for service in services:
                 try:
                     response = requests.get(service, timeout=5)
                     if response.status_code == 200:
-                        data = response.json()
-                        if 'ip' in data:
-                            return data['ip']
+                        if 'pconline.com.cn' in service:
+                            # 太平洋电脑网返回的是GBK编码的JSONP
+                            text = response.content.decode('gbk')
+                            ip_match = re.search(r'"ip":"(\d+\.\d+\.\d+\.\d+)"', text)
+                            if ip_match:
+                                return ip_match.group(1)
+                        elif 'ipip.net' in service:
+                            # ipip.net返回的是HTML，需要提取IP
+                            ip_match = re.search(r'(\d+\.\d+\.\d+\.\d+)', response.text)
+                            if ip_match:
+                                return ip_match.group(1)
+                        elif 'ip.cn' in service:
+                            # ip.cn返回JSON
+                            data = response.json()
+                            if data.get('code') == 0 and 'ip' in data:
+                                return data['ip']
+                        elif 'useragentinfo.com' in service:
+                            # useragentinfo返回JSON
+                            data = response.json()
+                            if 'ip' in data:
+                                return data['ip']
+                        elif 'taobao.com' in service:
+                            # 淘宝IP库返回JSON
+                            data = response.json()
+                            if data.get('code') == 0 and 'data' in data:
+                                return data['data'].get('ip')
                 except:
                     continue
             

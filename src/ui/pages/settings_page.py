@@ -2198,28 +2198,35 @@ class SettingsPage(QWidget):
                 if settings:
                     logger.info("从数据库加载系统设置")
                     # 主题设置
-                    theme_map = {"light": "浅色", "dark": "深色", "system": "跟随系统"}
+                    theme_map = {
+                        "system": "跟随系统",
+                        "light": "明亮",
+                        "dark": "暗色"
+                    }
                     current_theme = settings.get("theme", "system")
-                    self.theme_combo.setCurrentText(theme_map.get(current_theme, "跟随系统"))
+                    if hasattr(self, 'theme_combo') and self.theme_combo:
+                        self.theme_combo.setCurrentText(theme_map.get(current_theme, "跟随系统"))
                     
                     # 数据库路径
-                    if "db_path" in settings:
+                    if "db_path" in settings and hasattr(self, 'db_path') and self.db_path:
                         self.db_path.setText(settings["db_path"])
+                    elif "database" in settings and "path" in settings["database"] and hasattr(self, 'db_path') and self.db_path:
+                        self.db_path.setText(settings["database"]["path"])
                     
                     # 备份文件路径
-                    if "backup_path" in settings:
+                    if "backup_path" in settings and hasattr(self, 'backup_path') and self.backup_path:
                         self.backup_path.setText(settings["backup_path"])
                     
                     # 日志设置
-                    if "log_path" in settings:
+                    if "log_path" in settings and hasattr(self, 'log_path') and self.log_path:
                         self.log_path.setText(settings["log_path"])
-                    if "log_level" in settings:
+                    if "log_level" in settings and hasattr(self, 'log_level') and self.log_level:
                         self.log_level.setCurrentText(settings["log_level"])
                     
                     # 数据管理设置
-                    if "data_cleanup" in settings:
+                    if "data_cleanup" in settings and hasattr(self, 'data_cleanup') and self.data_cleanup:
                         self.data_cleanup.setChecked(settings["data_cleanup"].lower() == "true")
-                    if "cleanup_days" in settings:
+                    if "cleanup_days" in settings and hasattr(self, 'cleanup_period') and self.cleanup_period:
                         self.cleanup_period.setValue(int(settings["cleanup_days"]))
                     
                     cleanup_scope_map = {
@@ -2227,7 +2234,7 @@ class SettingsPage(QWidget):
                         "logs": "仅日志",
                         "temp": "仅临时文件"
                     }
-                    if "cleanup_scope" in settings:
+                    if "cleanup_scope" in settings and hasattr(self, 'cleanup_scope') and self.cleanup_scope:
                         self.cleanup_scope.setCurrentText(
                             cleanup_scope_map.get(settings["cleanup_scope"], "全部数据")
                         )
@@ -2240,27 +2247,34 @@ class SettingsPage(QWidget):
                 system_config = config["system"]
                 
                 # 主题设置
-                theme_map = {"light": "浅色", "dark": "深色", "system": "跟随系统"}
+                theme_map = {
+                    "system": "跟随系统",
+                    "light": "明亮",
+                    "dark": "暗色"
+                }
                 current_theme = system_config.get("theme", "system")
-                self.theme_combo.setCurrentText(theme_map.get(current_theme, "跟随系统"))
+                if hasattr(self, 'theme_combo') and self.theme_combo:
+                    self.theme_combo.setCurrentText(theme_map.get(current_theme, "跟随系统"))
                 
                 # 数据库路径
-                if "database" in config and "path" in config["database"]:
+                if "database" in config and "path" in config["database"] and hasattr(self, 'db_path') and self.db_path:
                     self.db_path.setText(config["database"]["path"])
                 
                 # 备份文件路径
-                if "backup_path" in system_config:
+                if "backup_path" in system_config and hasattr(self, 'backup_path') and self.backup_path:
                     self.backup_path.setText(system_config["backup_path"])
                 
                 # 日志设置
-                if "log_path" in system_config:
+                if "log_path" in system_config and hasattr(self, 'log_path') and self.log_path:
                     self.log_path.setText(system_config["log_path"])
-                if "log_level" in system_config:
+                if "log_level" in system_config and hasattr(self, 'log_level') and self.log_level:
                     self.log_level.setCurrentText(system_config["log_level"])
                 
                 # 数据管理设置
-                self.data_cleanup.setChecked(system_config.get("auto_cleanup", True))
-                self.cleanup_period.setValue(system_config.get("cleanup_days", 30))
+                if hasattr(self, 'data_cleanup') and self.data_cleanup:
+                    self.data_cleanup.setChecked(system_config.get("auto_cleanup", True))
+                if hasattr(self, 'cleanup_period') and self.cleanup_period:
+                    self.cleanup_period.setValue(system_config.get("cleanup_days", 30))
                 
                 cleanup_scope_map = {
                     "all": "全部数据",
@@ -2268,21 +2282,30 @@ class SettingsPage(QWidget):
                     "temp": "仅临时文件"
                 }
                 cleanup_scope = system_config.get("cleanup_scope", "all")
-                self.cleanup_scope.setCurrentText(
-                    cleanup_scope_map.get(cleanup_scope, "全部数据")
-                )
+                if hasattr(self, 'cleanup_scope') and self.cleanup_scope:
+                    self.cleanup_scope.setCurrentText(
+                        cleanup_scope_map.get(cleanup_scope, "全部数据")
+                    )
                 return
 
             # 3. 如果用户配置也没有，使用系统默认配置
             logger.info("使用系统默认配置")
-            self.theme_combo.setCurrentText("跟随系统")
-            self.db_path.setText(os.path.join(self.config_manager.config_dir, "data", "data.db"))
-            self.backup_path.setText(os.path.join(self.config_manager.config_dir, "backups"))
-            self.log_path.setText(os.path.join(self.config_manager.config_dir, "logs"))
-            self.log_level.setCurrentText("INFO")
-            self.data_cleanup.setChecked(True)
-            self.cleanup_period.setValue(30)
-            self.cleanup_scope.setCurrentText("全部数据")
+            if hasattr(self, 'theme_combo') and self.theme_combo:
+                self.theme_combo.setCurrentText("跟随系统")
+            if hasattr(self, 'db_path') and self.db_path:
+                self.db_path.setText(os.path.join(self.config_manager.config_dir, "data", "data.db"))
+            if hasattr(self, 'backup_path') and self.backup_path:
+                self.backup_path.setText(os.path.join(self.config_manager.config_dir, "backups"))
+            if hasattr(self, 'log_path') and self.log_path:
+                self.log_path.setText(os.path.join(self.config_manager.config_dir, "logs"))
+            if hasattr(self, 'log_level') and self.log_level:
+                self.log_level.setCurrentText("INFO")
+            if hasattr(self, 'data_cleanup') and self.data_cleanup:
+                self.data_cleanup.setChecked(True)
+            if hasattr(self, 'cleanup_period') and self.cleanup_period:
+                self.cleanup_period.setValue(30)
+            if hasattr(self, 'cleanup_scope') and self.cleanup_scope:
+                self.cleanup_scope.setCurrentText("全部数据")
 
         except Exception as e:
             logger.error(f"加载系统设置失败: {str(e)}")
