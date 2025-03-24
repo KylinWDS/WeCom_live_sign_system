@@ -138,6 +138,11 @@ def verify_password(password: str, hashed: str, salt: str) -> bool:
         bool: 是否匹配
     """
     try:
+        # 检查参数是否为None
+        if password is None or hashed is None or salt is None:
+            logger.error("密码验证失败：参数不能为None")
+            return False
+            
         # 使用相同的参数重新计算哈希
         key = hashlib.pbkdf2_hmac(
             'sha256',

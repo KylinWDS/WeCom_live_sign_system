@@ -2,7 +2,7 @@ import time
 import functools
 from datetime import datetime
 from typing import Dict, Any, Callable
-from utils.logger import get_logger
+from .logger import get_logger
 
 logger = get_logger(__name__)
 

@@ -6,7 +6,7 @@ from ..utils.widget_utils import WidgetUtils
 from utils.logger import get_logger
 from utils.error_handler import ErrorHandler
 from core.database import DatabaseManager
-from models.user import User
+from models.user import User, UserRole
 
 logger = get_logger(__name__)
 
@@ -159,7 +159,7 @@ class AdminResetDialog(QDialog):
             
             # 重置密码
             with self.db_manager.get_session() as session:
-                admin = session.query(User).filter_by(role="admin").first()
+                admin = session.query(User).filter_by(role=UserRole.ROOT_ADMIN.value).first()
                 if not admin:
                     ErrorHandler.handle_error("未找到管理员用户", self, "错误")
                     return

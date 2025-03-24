@@ -9,12 +9,12 @@ class PermissionManager:
     
     # 角色权限映射
     ROLE_PERMISSIONS: Dict[str, List[str]] = {
-        UserRole.USER.value: [
+        UserRole.NORMAL.value: [
             "view_lives",
             "view_signs",
             "view_stats"
         ],
-        UserRole.ADMIN.value: [
+        UserRole.WECOM_ADMIN.value: [
             "view_lives",
             "create_live",
             "edit_live",
@@ -39,8 +39,8 @@ class PermissionManager:
     
     # 角色名称映射
     ROLE_NAMES: Dict[str, str] = {
-        UserRole.USER.value: "普通用户",
-        UserRole.ADMIN.value: "管理员",
+        UserRole.NORMAL.value: "普通用户",
+        UserRole.WECOM_ADMIN.value: "企业微信管理员",
         UserRole.ROOT_ADMIN.value: "超级管理员"
     }
     
@@ -105,9 +105,9 @@ class PermissionManager:
         try:
             if user_role == UserRole.ROOT_ADMIN.value:
                 return True
-            elif user_role == UserRole.ADMIN.value:
+            elif user_role == UserRole.WECOM_ADMIN.value:
                 return data_type in ["lives", "signs", "stats"]
-            else:  # USER
+            else:  # NORMAL
                 return data_type in ["lives", "signs", "stats"]
         except Exception as e:
             logger.error(f"检查数据访问权限失败: {str(e)}")
@@ -126,7 +126,7 @@ class PermissionManager:
         try:
             if user_role == UserRole.ROOT_ADMIN.value:
                 return True
-            elif user_role == UserRole.ADMIN.value:
+            elif user_role == UserRole.WECOM_ADMIN.value:
                 return operation in [
                     "view",
                     "create",
@@ -134,7 +134,7 @@ class PermissionManager:
                     "delete",
                     "export"
                 ]
-            else:  # USER
+            else:  # NORMAL
                 return operation == "view"
         except Exception as e:
             logger.error(f"检查操作权限失败: {str(e)}")

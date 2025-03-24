@@ -5,33 +5,101 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 from loguru import logger
-from src.core.config_manager import ConfigManager
 
-# 初始化ConfigManager
-config_manager = ConfigManager()
+# 全局日志记录器实例
+_logger = None
+_is_initialized = False
 
-# 移除延迟导入ConfigManager以避免循环导入
-# ConfigManager = None
+def setup_logger(log_dir: str = None, log_level: str = "INFO", log_retention: int = 30):
+    """设置日志记录器
+    
+    Args:
+        log_dir: 日志目录
+        log_level: 日志级别
+        log_retention: 日志保留天数
+    """
+    global _logger, _is_initialized
+    # 如果没有指定日志目录，使用用户目录下的默认位置
+    if log_dir is None:
+        log_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign", "logs")
+    # 确保日志目录存在
+    log_dir = Path(log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 移除所有现有处理器
+    logger.remove()
+    
+    # 添加文件处理器
+    log_file = log_dir / f"{datetime.now().strftime('%Y%m%d')}.log"
+    logger.add(
+        str(log_file),
+        rotation="00:00",  # 每天午夜轮换
+        retention=f"{log_retention} days",  # 保留天数
+        level=log_level,
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} | {message}",
+        encoding="utf-8"
+    )
+    
+    # 添加控制台处理器
+    logger.add(
+        lambda msg: print(msg),
+        level=log_level,
+        format="{time:HH:mm:ss} | {level} | {message}",
+        colorize=True
+    )
+    
+    _logger = logger
+    _is_initialized = True
+    return logger
+
+def get_logger(name: str = None) -> logger:
+    """获取日志记录器
+    
+    Args:
+        name: 日志记录器名称
+        
+    Returns:
+        logger: 日志记录器
+    """
+    global _logger, _is_initialized
+    
+    if not _is_initialized:
+        # 如果日志记录器未正式初始化，使用临时配置
+        # 只添加控制台输出，不创建文件
+        logger.remove()  # 移除默认处理器
+        logger.add(
+            lambda msg: print(msg),
+            level="INFO",
+            format="{time:HH:mm:ss} | {level} | {message}",
+            colorize=True
+        )
+        _logger = logger
+    
+    return _logger.bind(name=name)
+
+# 移除模块级别的初始化
+# setup_logger()
 
 class Logger:
     """日志管理器"""
     
-    def __init__(self, log_dir: str = "logs"):
+    def __init__(self, log_dir: str = None):
         """初始化日志管理器
         
         Args:
             log_dir: 日志目录
         """
-        self.config_manager = config_manager
-        self.log_dir = Path(self.config_manager.get("system.log_path", log_dir))
-        self.log_level = self.config_manager.get("system.log_level", "INFO")
-        self.log_retention = self.config_manager.get("system.log_retention", 30)
-        self._ensure_log_dir()
-        self._setup_logger()
+        self.log_dir = Path(log_dir) if log_dir else None
+        self.log_level = "INFO"
+        self.log_retention = 30
+        if self.log_dir:
+            self._ensure_log_dir()
+            self._setup_logger()
         
     def _ensure_log_dir(self):
         """确保日志目录存在"""
-        self.log_dir.mkdir(exist_ok=True)
+        if self.log_dir:
+            self.log_dir.mkdir(exist_ok=True)
         
     def _setup_logger(self):
         """设置日志记录器"""
@@ -353,8 +421,40 @@ class Logger:
         except Exception as e:
             logger.error(f"清理旧日志失败: {str(e)}")
             
-# 创建全局日志管理器实例
-logger_manager = Logger()
+    def info(self, message: str):
+        """记录信息日志
+        
+        Args:
+            message: 日志消息
+        """
+        logger.info(message)
+        
+    def error(self, message: str):
+        """记录错误日志
+        
+        Args:
+            message: 日志消息
+        """
+        logger.error(message)
+        
+    def debug(self, message: str):
+        """记录调试日志
+        
+        Args:
+            message: 日志消息
+        """
+        logger.debug(message)
+        
+    def warning(self, message: str):
+        """记录警告日志
+        
+        Args:
+            message: 日志消息
+        """
+        logger.warning(message)
+
+# 移除全局日志管理器实例的创建
+# logger_manager = Logger()
 
 def get_logger(name: str = None) -> logger:
     """获取日志记录器实例

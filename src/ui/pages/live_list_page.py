@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QTableWidget, QTableWidgetItem,
     QMessageBox, QComboBox, QSpinBox, QHeaderView,
     QFileDialog, QDialog, QFormLayout, QGroupBox,
-    QDateEdit, QTimeEdit
+    QDateEdit, QTimeEdit, QToolBar, QSpacerItem, QSizePolicy
 )
 from PySide6.QtCore import Qt, QDateTime
 from PySide6.QtGui import QIcon
@@ -408,6 +408,25 @@ class LiveListPage(QWidget):
     def refresh_data(self):
         """刷新数据"""
         self.load_data()
+
+    def _create_toolbar(self):
+        """创建工具栏"""
+        toolbar = QToolBar()
+        toolbar.setObjectName("toolbar")
+        
+        # 添加刷新按钮
+        refresh_button = QPushButton("刷新")
+        refresh_button.setObjectName("primaryButton")
+        refresh_button.clicked.connect(self.refresh_data)
+        toolbar.addWidget(refresh_button)
+        
+        # 添加导出按钮
+        export_button = QPushButton("导出数据")
+        export_button.setObjectName("primaryButton")
+        export_button.clicked.connect(self.export_data)
+        toolbar.addWidget(export_button)
+        
+        return toolbar
 
 class LiveDetailDialog(QDialog):
     """直播详情对话框"""

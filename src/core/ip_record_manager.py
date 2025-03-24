@@ -17,37 +17,104 @@ class IPRecordManager:
         
         Args:
             ip: IP地址
-            source: IP来源，'manual' 或 'error'
+            source: IP来源，可选值：'manual', 'error', 'history', 'infer'
             
         Returns:
             bool: 是否添加成功
         """
         try:
-            # 验证IP格式
+            # 1. 验证IP地址格式
             if not self._validate_ip(ip):
                 logger.warning(f"无效的IP地址格式: {ip}")
                 return False
             
-            # 检查IP数量限制
-            count = self.session.query(IPRecord).filter_by(is_active=True).count()
-            if count >= 120:
-                logger.warning(f"IP记录数量已达到上限(120)，无法添加新IP: {ip}")
-                return False
+            # 2. 检查数量限制（非infer类型）
+            if source != 'infer':
+                count = self.session.query(IPRecord).filter(
+                    IPRecord.is_active == True,
+                    IPRecord.source != 'infer'
+                ).count()
+                if count >= 254:
+                    logger.warning(f"IP记录数量已达到上限(254)，无法添加新IP: {ip}")
+                    return False
             
-            # 检查IP是否已存在
+            # 3. 检查IP是否已存在
             existing = self.session.query(IPRecord).filter_by(ip=ip).first()
-            if existing:
-                if not existing.is_active:
-                    existing.is_active = True
-                    existing.source = source
+            
+            # 4. 处理manual类型的特殊逻辑
+            if source == 'manual':
+                if existing:
+                    # 如果IP已存在，更新为manual类型
+                    existing.source = 'manual'
                     existing.updated_at = datetime.now()
+                    existing.is_active = True
                     self.session.commit()
+                    logger.info(f"将已存在的IP记录 [{ip}] 更新为manual类型")
+                    
+                    # 成功设置当前IP为manual后，将其他manual类型IP更改为history
+                    other_manuals = self.session.query(IPRecord).filter(
+                        IPRecord.source == 'manual',
+                        IPRecord.is_active == True,
+                        IPRecord.ip != ip  # 排除当前IP
+                    ).all()
+                    
+                    for record in other_manuals:
+                        record.source = 'history'
+                        record.updated_at = datetime.now()
+                        logger.info(f"将IP [{record.ip}] 从manual类型更改为history类型")
+                    
+                    self.session.commit()
+                    return True
+                else:
+                    # 如果是新IP，先添加为manual类型
+                    ip_record = IPRecord(ip=ip, source=source)
+                    self.session.add(ip_record)
+                    self.session.commit()
+                    logger.info(f"添加新IP记录: {ip}, 类型: {source}")
+                    
+                    # 成功添加当前IP后，将其他manual类型IP更改为history
+                    other_manuals = self.session.query(IPRecord).filter(
+                        IPRecord.source == 'manual',
+                        IPRecord.is_active == True,
+                        IPRecord.ip != ip  # 排除当前IP
+                    ).all()
+                    
+                    for record in other_manuals:
+                        record.source = 'history'
+                        record.updated_at = datetime.now()
+                        logger.info(f"将IP [{record.ip}] 从manual类型更改为history类型")
+                    
+                    self.session.commit()
+                    return True
+            
+            # 5. 处理非manual类型的情况
+            if existing:
+                # 更新通用属性
+                existing.updated_at = datetime.now()
+                existing.is_active = True
+                
+                # 根据不同情况更新source
+                if source == 'error':
+                    # error类型不能覆盖manual类型，但可以覆盖其他类型
+                    if existing.source == 'manual':
+                        # 当error遇到manual时，只更新时间，不改变类型
+                        logger.info(f"保留IP {ip} 的'manual'类型，只更新时间")
+                    elif existing.source != 'error':
+                        # error可以覆盖history和infer类型
+                        existing.source = 'error'
+                        logger.info(f"将IP {ip} 从'{existing.source}'类型更新为'error'类型")
+                elif source in ['history', 'infer']:
+                    # history和infer类型不覆盖已有类型，保持原有类型
+                    logger.info(f"保留IP {ip} 的'{existing.source}'类型，不覆盖为'{source}'类型")
+                
+                self.session.commit()
                 return True
             
-            # 添加新IP
+            # 6. 添加新IP记录（非manual类型）
             ip_record = IPRecord(ip=ip, source=source)
             self.session.add(ip_record)
             self.session.commit()
+            logger.info(f"添加新IP记录: {ip}, 类型: {source}")
             return True
             
         except Exception as e:
@@ -252,4 +319,39 @@ class IPRecordManager:
             return self.session.query(IPRecord).filter(IPRecord.id.in_(record_ids)).all()
         except Exception as e:
             logger.error(f"获取IP记录失败: {str(e)}")
+            return []
+    
+    def get_ip_source(self, ip: str) -> str:
+        """获取IP地址的来源
+        
+        Args:
+            ip: IP地址
+            
+        Returns:
+            str: IP来源，可能的值：'manual', 'error', 'history', 'infer'
+        """
+        try:
+            record = self.session.query(IPRecord).filter_by(ip=ip, is_active=True).first()
+            return record.source if record else ''
+        except Exception as e:
+            logger.error(f"获取IP来源失败: {str(e)}")
+            return ''
+    
+    def get_ips_by_source(self, source: str) -> List[str]:
+        """根据来源获取IP地址列表
+        
+        Args:
+            source: IP来源，可选值：'manual', 'error', 'history', 'infer'
+            
+        Returns:
+            List[str]: IP地址列表
+        """
+        try:
+            records = self.session.query(IPRecord).filter_by(
+                source=source,
+                is_active=True
+            ).order_by(IPRecord.created_at.desc()).all()
+            return [record.ip for record in records]
+        except Exception as e:
+            logger.error(f"获取{source}来源的IP记录失败: {str(e)}")
             return [] 

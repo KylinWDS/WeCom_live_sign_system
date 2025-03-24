@@ -2,8 +2,8 @@ from datetime import datetime
 from typing import Optional, List
 from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey
 from sqlalchemy.orm import relationship
-from src.utils.logger import get_logger
-from src.models.base import BaseModel
+from ..utils.logger import get_logger
+from .base import BaseModel
 
 logger = get_logger(__name__)
 
@@ -25,8 +25,8 @@ class LiveType:
 
 class LiveBooking(BaseModel):
     """直播预约模型"""
-    
-    __tablename__ = "live_bookings"
+    __tablename__ = 'live_bookings'
+    __table_args__ = {'extend_existing': True}  # 允许表重复定义
     
     # 基本信息
     livingid = Column(String(50), unique=True, nullable=False, comment="直播ID")

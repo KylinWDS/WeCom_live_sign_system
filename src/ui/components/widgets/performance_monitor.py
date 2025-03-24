@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QHeaderView
 )
 from PySide6.QtCore import QTimer
-from utils.logger import get_logger
+from ....utils.logger import get_logger
 from datetime import datetime, timedelta
 import psutil
 import os

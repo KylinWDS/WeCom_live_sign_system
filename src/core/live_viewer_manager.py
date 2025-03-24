@@ -164,21 +164,39 @@ class LiveViewerManager:
                 "next_key": ""
             }
             
-            while True:
-                response = requests.post(url, json=params)
-                result = response.json()
-                
-                if result["errcode"] == 0:
-                    # 处理企业成员观看记录
-                    self.process_internal_users(result["stat_info"]["users"], living_id, result["stat_info"])
-                    # 处理外部用户观看记录
-                    self.process_external_users(result["stat_info"]["external_users"], living_id, result["stat_info"])
+            max_retries = 10  # 最大重试次数
+            retry_count = 0
+            
+            while retry_count < max_retries:
+                retry_count += 1
+                try:
+                    response = requests.post(url, json=params, timeout=30)  # 添加30秒超时
+                    result = response.json()
                     
-                    if result["ending"] == 1:
-                        break
-                    params["next_key"] = result["next_key"]
-                else:
-                    raise Exception(f"获取观看明细失败: {result['errmsg']}")
+                    if result["errcode"] == 0:
+                        # 处理企业成员观看记录
+                        self.process_internal_users(result["stat_info"]["users"], living_id, result["stat_info"])
+                        # 处理外部用户观看记录
+                        self.process_external_users(result["stat_info"]["external_users"], living_id, result["stat_info"])
+                        
+                        if result["ending"] == 1:
+                            break
+                        params["next_key"] = result["next_key"]
+                    else:
+                        logger.error(f"获取观看明细失败: {result['errmsg']}")
+                        if result["errcode"] in [40014, 42001]:  # token过期
+                            token = self.token_manager.get_token(force_refresh=True)
+                            params["access_token"] = token
+                        else:
+                            break
+                except requests.Timeout:
+                    logger.warning(f"请求超时，重试第{retry_count}次")
+                    if retry_count >= max_retries:
+                        raise Exception("获取观看明细超时")
+                except requests.RequestException as e:
+                    logger.error(f"请求异常: {str(e)}")
+                    if retry_count >= max_retries:
+                        raise
                     
         except Exception as e:
             logger.error(f"处理观看者信息失败: {str(e)}")

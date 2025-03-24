@@ -1,9 +1,9 @@
 import requests
 from typing import Dict, Any, Optional
-from src.utils.logger import get_logger
-from src.core.token_manager import TokenManager
-from src.utils.error_handler import ErrorHandler
-from src.utils.performance_manager import PerformanceManager
+from ..utils.logger import get_logger
+from ..core.token_manager import TokenManager
+from ..utils.error_handler import ErrorHandler
+from ..utils.performance_manager import PerformanceManager
 import time
 from datetime import datetime
 
@@ -14,11 +14,12 @@ class WeComAPI:
     
     BASE_URL = "https://qyapi.weixin.qq.com/cgi-bin"
     
-    def __init__(self, corpid: str, corpsecret: str):
+    def __init__(self, corpid: str, corpsecret: str, agent_id: str = None):
         self.corpid = corpid
         self.corpsecret = corpsecret
+        self.agent_id = agent_id
         self.token_manager = TokenManager()
-        self.token_manager.set_credentials(corpid, corpsecret)
+        self.token_manager.set_credentials(corpid, corpsecret, agent_id)
         self.error_handler = ErrorHandler()
         self.performance_manager = PerformanceManager()
         
@@ -94,8 +95,13 @@ class WeComAPI:
                 logger.error(f"请求参数: {params}")
                 if data:
                     logger.error(f"请求数据: {data}")
-                    
-                raise Exception(f"API 调用失败: {error_msg}")
+                
+                # 处理特定的错误码
+                error_code = result.get("errcode")
+                if error_code == 60020 or "not allow to access from your ip" in error_msg:
+                    raise Exception(f"API 调用失败: {error_msg}")
+                else:    
+                    raise Exception(f"API 调用失败: {error_msg}")
                 
         except Exception as e:
             self._api_stats["error_calls"] += 1
@@ -175,7 +181,7 @@ class WeComAPI:
                 "living_duration": living_duration,
                 "type": type,
                 "description": description,
-                "agentid": self.token_manager.get_agent_id()
+                "agentid": self.agent_id
             }
             
             result = self._make_request("POST", "living/create", data=data)
@@ -234,9 +240,12 @@ class WeComAPI:
             self.error_handler.handle_error(e, "取消预约直播")
             raise
     
-    def test_connection(self) -> bool:
+    def test_connection(self, user_id: str = None) -> bool:
         """测试企业微信接口连接
         
+        Args:
+            user_id: 用户ID，用于测试获取用户直播列表接口
+            
         Returns:
             bool: 连接是否成功
         """
@@ -246,15 +255,30 @@ class WeComAPI:
             if not token:
                 raise Exception("获取 access_token 失败")
                 
-            # 测试接口调用
+            # 基础测试接口调用
             self._make_request("GET", "gettoken", {
                 "corpid": self.corpid,
                 "corpsecret": self.corpsecret
             })
             
+            # 如果提供了用户ID，测试获取用户直播列表接口
+            if user_id:
+                try:
+                    self.get_user_all_livingid(user_id, "", 1)
+                    logger.info(f"测试获取用户[{user_id}]直播列表成功")
+                except Exception as e:
+                    logger.error(f"测试获取用户[{user_id}]直播列表失败: {str(e)}")
+                    raise Exception(f"获取用户直播列表失败: {str(e)}")
+            
             logger.info("企业微信接口连接测试成功")
             return True
             
         except Exception as e:
-            self.error_handler.handle_error(e, "测试企业微信接口连接")
+            # 检查是否为IP白名单错误，如果是则通过错误处理器的handle_wecom_api_error方法处理
+            if ErrorHandler.is_ip_whitelist_error(str(e)):
+                # 此处不直接调用UI相关处理，仅记录错误
+                logger.error(f"企业微信API连接测试失败，可能是IP白名单限制: {str(e)}")
+            else:
+                # 记录一般错误
+                self.error_handler.handle_error(e, "测试企业微信接口连接")
             raise 

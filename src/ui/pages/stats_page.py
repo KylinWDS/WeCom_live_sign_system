@@ -6,17 +6,17 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QColor, QPen
 
 # UI相关导入
-from ..managers.style import StyleManager
-from ..utils.widget_utils import WidgetUtils
-from ..components.widgets.chart_widget import ChartWidget
-from ..components.dialogs.io_dialog import IODialog
-from ..components.dialogs.export_dialog import ExportDialog
+from src.ui.managers.style import StyleManager
+from src.ui.utils.widget_utils import WidgetUtils
+from src.ui.components.widgets.chart_widget import ChartWidget
+from src.ui.components.dialogs.io_dialog import IODialog
+from src.ui.components.dialogs.export_dialog import ExportDialog
 
 # 核心功能导入
-from core.database import DatabaseManager
+from src.core.database import DatabaseManager
 
 # 工具类导入
-from utils.logger import get_logger
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

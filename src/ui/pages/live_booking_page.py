@@ -1,10 +1,9 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QLabel, QLineEdit, QTextEdit, QComboBox,
                              QDateTimeEdit, QSpinBox, QMessageBox, QGroupBox,
-                             QTableWidget, QTableWidgetItem, QDialog, QFormLayout,
-                             QHeaderView, QFileDialog)
-from PySide6.QtCore import Qt, QDateTime
-from PySide6.QtGui import QIcon
+                             QFormLayout, QCalendarWidget)
+from PySide6.QtCore import Qt, QDateTime, QTime, Signal
+from PySide6.QtGui import QIcon, QPalette, QColor
 from ..managers.style import StyleManager
 from ..utils.widget_utils import WidgetUtils
 from src.utils.logger import get_logger
@@ -12,13 +11,14 @@ from src.ui.managers.animation import AnimationManager
 from src.utils.performance_manager import PerformanceManager
 from src.utils.error_handler import ErrorHandler
 from src.models.live_booking import LiveBooking
+from src.models.user import User
 from src.core.database import DatabaseManager
 from src.api.wecom import WeComAPI
 from src.core.task_manager import TaskManager
 from datetime import datetime
-from src.ui.components.dialogs.io_dialog import IODialog
 import pandas as pd
 import os
+from ..components.widgets.custom_datetime_widget import CustomDateTimeWidget
 
 logger = get_logger(__name__)
 
@@ -32,6 +32,9 @@ class LiveBookingPage(QWidget):
         self.task_manager = task_manager
         self.performance_manager = PerformanceManager()
         self.error_handler = ErrorHandler()
+        self.current_user = None
+        with self.db_manager.get_session() as session:
+            self.current_user = session.query(User).order_by(User.last_login.desc()).first()
         self.init_ui()
         
     def init_ui(self):
@@ -40,108 +43,173 @@ class LiveBookingPage(QWidget):
         
         # 创建主布局
         layout = QVBoxLayout(self)
-        layout.setSpacing(20)
-        
-        # 创建工具栏
-        toolbar = self._create_toolbar()
-        layout.addWidget(toolbar)
-        
-        # 创建搜索区域
-        search_group = self._create_search_group()
-        layout.addWidget(search_group)
-        
-        # 创建表格
-        self.table = QTableWidget()
-        self.table.setColumnCount(7)
-        self.table.setHorizontalHeaderLabels([
-            "直播ID", "直播标题", "直播时间", "直播状态",
-            "观看人数", "签到人数", "操作"
-        ])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        WidgetUtils.set_table_style(self.table)
-        layout.addWidget(self.table)
-        
-        # 设置样式
-        self.setStyleSheet(StyleManager.get_live_booking_style())
-        
-        # 添加淡入动画
-        AnimationManager.fade_in(self)
-        
-        # 加载数据
-        self.load_data()
-        
-    def _create_toolbar(self):
-        """创建工具栏"""
-        toolbar = QHBoxLayout()
+        layout.setSpacing(10)  # 减小主布局的间距
+        layout.setContentsMargins(15, 15, 15, 15)  # 减小主布局的边距
         
         # 创建表单
         form_group = self._create_form_group()
-        toolbar.addWidget(form_group)
+        layout.addWidget(form_group)
         
-        # 创建按钮
+        # 创建按钮布局
         button_layout = QHBoxLayout()
+        button_layout.setContentsMargins(0, 10, 0, 0)  # 减小按钮布局的上边距
         
         # 保存按钮
-        save_btn = QPushButton("保存")
+        save_btn = QPushButton("创建直播")
         save_btn.setObjectName("primaryButton")
+        save_btn.setMinimumWidth(120)
+        save_btn.setMinimumHeight(36)
         save_btn.clicked.connect(self._on_save)
+        
+        # 重置按钮
+        reset_btn = QPushButton("重置")
+        reset_btn.setObjectName("defaultButton")
+        reset_btn.setMinimumWidth(120)
+        reset_btn.setMinimumHeight(36)
+        reset_btn.clicked.connect(self._clear_form)
+        
+        button_layout.addStretch()
+        button_layout.addWidget(reset_btn)
         button_layout.addWidget(save_btn)
+        button_layout.addStretch()
         
-        # 取消按钮
-        cancel_btn = QPushButton("取消")
-        cancel_btn.setObjectName("secondaryButton")
-        cancel_btn.clicked.connect(self._on_cancel)
-        button_layout.addWidget(cancel_btn)
+        layout.addLayout(button_layout)
         
-        toolbar.addLayout(button_layout)
-        
-        return toolbar
+        # 加载用户列表
+        self._load_users()
         
     def _create_form_group(self) -> QGroupBox:
         """创建表单组"""
         group = QGroupBox("直播信息")
-        layout = QVBoxLayout(group)
-        layout.setSpacing(15)
+        
+        layout = QFormLayout(group)
+        layout.setSpacing(5)  # 减小表单项之间的间距
+        layout.setContentsMargins(15, 20, 15, 15)  # 减小表单组的边距
+        layout.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         
         # 主播信息
-        anchor_layout = QHBoxLayout()
-        anchor_layout.addWidget(QLabel("主播ID:"))
-        self.anchor_input = QLineEdit()
-        self.anchor_input.setPlaceholderText("请输入主播ID")
-        WidgetUtils.set_input_style(self.anchor_input)
-        anchor_layout.addWidget(self.anchor_input)
-        layout.addLayout(anchor_layout)
+        self.anchor_combo = QComboBox()
+        self.anchor_combo.setEditable(True)
+        self.anchor_combo.setPlaceholderText("请选择或输入主播ID")
+        self.anchor_combo.setMinimumWidth(300)
+        layout.addRow(self._create_label("主播"), self.anchor_combo)
         
         # 直播标题
-        title_layout = QHBoxLayout()
-        title_layout.addWidget(QLabel("直播标题:"))
         self.title_input = QLineEdit()
         self.title_input.setPlaceholderText("请输入直播标题(最多20个字符)")
-        WidgetUtils.set_input_style(self.title_input)
-        title_layout.addWidget(self.title_input)
-        layout.addLayout(title_layout)
+        self.title_input.setMinimumWidth(300)
+        layout.addRow(self._create_label("标题"), self.title_input)
         
-        # 直播时间
-        time_layout = QHBoxLayout()
-        time_layout.addWidget(QLabel("开始时间:"))
-        self.start_time = QDateTimeEdit()
-        self.start_time.setDateTime(QDateTime.currentDateTime().addSecs(3600))  # 默认1小时后
-        self.start_time.setMinimumDateTime(QDateTime.currentDateTime())
-        time_layout.addWidget(self.start_time)
+        # 时间选择部分
+        time_widget = QWidget()
+        time_layout = QHBoxLayout(time_widget)
+        time_layout.setContentsMargins(0, 0, 0, 0)
+        time_layout.setSpacing(10)  # 设置适当的间距
         
-        time_layout.addWidget(QLabel("直播时长:"))
+        # 使用更紧凑的布局和统一的标签样式
+        label_style = """
+            QLabel {
+                color: #606266;
+                font-size: 14px;
+                padding: 0;
+                margin: 0;
+                min-height: 36px;
+                line-height: 36px;
+                background: transparent;
+            }
+        """
+        
+        # 开始时间容器
+        start_container = QWidget()
+        start_layout = QHBoxLayout(start_container)
+        start_layout.setContentsMargins(0, 0, 0, 0)
+        start_layout.setSpacing(2)
+        
+        from_label = QLabel("从")
+        from_label.setFixedWidth(20)
+        from_label.setStyleSheet(label_style)
+        from_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        
+        self.start_time = CustomDateTimeWidget()
+        self.start_time.setDateTime(QDateTime.currentDateTime().addSecs(600))
+        self.start_time.dateTimeChanged.connect(self._on_time_changed)
+        self.start_time.setWidth(200)
+        
+        start_layout.addWidget(from_label)
+        start_layout.addWidget(self.start_time)
+        
+        # 结束时间容器
+        end_container = QWidget()
+        end_layout = QHBoxLayout(end_container)
+        end_layout.setContentsMargins(0, 0, 0, 0)
+        end_layout.setSpacing(2)
+        
+        to_label = QLabel("至")
+        to_label.setFixedWidth(20)
+        to_label.setStyleSheet(label_style)
+        to_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        
+        self.end_time = CustomDateTimeWidget()
+        self.end_time.setDateTime(QDateTime.currentDateTime().addSecs(7800))
+        self.end_time.dateTimeChanged.connect(self._on_time_changed)
+        self.end_time.setWidth(200)
+        
+        end_layout.addWidget(to_label)
+        end_layout.addWidget(self.end_time)
+        
+        # 时长显示容器
+        duration_container = QWidget()
+        duration_layout = QHBoxLayout(duration_container)
+        duration_layout.setContentsMargins(0, 0, 0, 0)
+        duration_layout.setSpacing(2)
+        
+        duration_label = QLabel("时长")
+        duration_label.setFixedWidth(30)
+        duration_label.setStyleSheet(label_style)
+        duration_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        
+        # 时长显示样式
+        duration_style = """
+            QSpinBox {
+                border: 1px solid #DCDFE6;
+                border-radius: 4px;
+                padding: 0 5px;
+                min-height: 36px;
+                background: #F5F7FA;
+            }
+        """
+        
         self.duration = QSpinBox()
-        self.duration.setRange(1, 24 * 3600)  # 1秒到24小时
-        self.duration.setValue(3600)  # 默认1小时
+        self.duration.setRange(1, 24 * 3600)
+        self.duration.setValue(7200)
         self.duration.setSuffix(" 秒")
-        WidgetUtils.set_spin_style(self.duration)
-        time_layout.addWidget(self.duration)
+        self.duration.setReadOnly(True)
+        self.duration.setButtonSymbols(QSpinBox.NoButtons)
+        self.duration.setFixedWidth(80)
+        self.duration.setAlignment(Qt.AlignRight)
+        self.duration.setStyleSheet(duration_style)
         
-        layout.addLayout(time_layout)
+        duration_layout.addWidget(duration_label)
+        duration_layout.addWidget(self.duration)
+        
+        # 设置每个部分的固定高度以确保对齐
+        start_container.setFixedHeight(36)
+        end_container.setFixedHeight(36)
+        duration_container.setFixedHeight(36)
+        
+        # 将三个容器添加到主布局，并添加适当的伸缩因子以控制间距
+        time_layout.addWidget(start_container)
+        time_layout.addWidget(end_container)
+        time_layout.addWidget(duration_container)
+        
+        # 添加伸缩因子以确保三个容器均匀分布
+        time_layout.addStretch(1)
+        
+        # 设置表单布局的行间距
+        layout.addRow(self._create_label("时间"), time_widget)
         
         # 直播类型
-        type_layout = QHBoxLayout()
-        type_layout.addWidget(QLabel("直播类型:"))
         self.type_combo = QComboBox()
         self.type_combo.addItems([
             "通用直播",
@@ -150,72 +218,128 @@ class LiveBookingPage(QWidget):
             "企业培训",
             "活动直播"
         ])
-        self.type_combo.setCurrentText("企业培训")  # 默认企业
-        WidgetUtils.set_combo_style(self.type_combo)
-        type_layout.addWidget(self.type_combo)
-        layout.addLayout(type_layout)
+        self.type_combo.setCurrentText("企业培训")
+        self.type_combo.setMinimumWidth(300)
+        layout.addRow(self._create_label("类型"), self.type_combo)
         
         # 直播描述
-        desc_layout = QVBoxLayout()
-        desc_layout.addWidget(QLabel("直播描述:"))
         self.desc_input = QTextEdit()
         self.desc_input.setPlaceholderText("请输入直播描述(最多100个字符)")
+        self.desc_input.setMinimumWidth(300)
         self.desc_input.setMaximumHeight(100)
-        WidgetUtils.set_input_style(self.desc_input)
-        desc_layout.addWidget(self.desc_input)
-        layout.addLayout(desc_layout)
+        layout.addRow(self._create_label("描述"), self.desc_input)
         
         return group
         
-    def _create_search_group(self) -> QGroupBox:
-        """创建搜索区域"""
-        group = QGroupBox("搜索条件")
-        layout = QVBoxLayout(group)
-        layout.setSpacing(10)
+    def _create_label(self, text: str) -> QLabel:
+        """创建统一样式的表单标签"""
+        label = QLabel(f"{text}:")
+        label.setMinimumWidth(70)
+        label.setFixedHeight(36)
+        label.setStyleSheet("""
+            QLabel {
+                color: #606266;
+                font-size: 14px;
+                padding: 0;
+                margin: 0;
+                min-height: 36px;
+                line-height: 36px;
+                background: transparent;
+            }
+        """)
+        label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        return label
         
-        # 第一行
-        row1_layout = QHBoxLayout()
+    def _load_users(self):
+        """加载用户列表"""
+        try:
+            if not self.current_user:
+                ErrorHandler.handle_warning("无法获取当前用户信息", self)
+                return
+            
+            with self.db_manager.get_session() as session:
+                # 刷新当前用户信息
+                current_user = session.merge(self.current_user)
+                session.refresh(current_user)
+                
+                # 清空下拉列表
+                self.anchor_combo.clear()
+                
+                if current_user.login_name.lower() == "root-admin":
+                    # 如果是超级管理员，加载除root-admin外的所有用户
+                    users = session.query(User).filter(
+                        User.login_name != "root-admin",
+                        User.is_active == True
+                    ).all()
+                    
+                    # 添加用户到下拉列表
+                    for user in users:
+                        # 使用wecom_code或login_name作为值
+                        user_id = user.wecom_code if user.wecom_code else user.login_name
+                        # 显示格式：用户名(所属企业名称)
+                        display_name = f"{user.name} ({user_id}|{user.corpname or '未知企业'})"
+                        self.anchor_combo.addItem(display_name, user_id)
+                else:
+                    # 普通用户只能看到同企业的用户
+                    if not current_user.corpid:
+                        ErrorHandler.handle_warning("无法获取当前用户所属企业", self)
+                        return
+                    
+                    # 获取当前企业的所有用户
+                    users = session.query(User).filter_by(
+                        corpid=current_user.corpid,
+                        is_active=True  # 只获取激活的用户
+                    ).all()
+                    
+                    # 添加用户到下拉列表
+                    for user in users:
+                        # 使用wecom_code或login_name作为值
+                        user_id = user.wecom_code if user.wecom_code else user.login_name
+                        self.anchor_combo.addItem(f"{user.name} ({user_id})", user_id)
+                
+                # 设置当前用户为默认值（如果不是root-admin的话）
+                if current_user.login_name.lower() != "root-admin":
+                    current_user_id = current_user.wecom_code if current_user.wecom_code else current_user.login_name
+                    index = self.anchor_combo.findData(current_user_id)
+                    if index >= 0:
+                        self.anchor_combo.setCurrentIndex(index)
+                        
+        except Exception as e:
+            ErrorHandler.handle_error(e, self, "加载用户列表失败")
         
-        # 直播标题
-        row1_layout.addWidget(QLabel("直播标题:"))
-        self.live_title = QLineEdit()
-        WidgetUtils.set_input_style(self.live_title)
-        row1_layout.addWidget(self.live_title)
-        
-        # 直播状态
-        row1_layout.addWidget(QLabel("直播状态:"))
-        self.live_status = QComboBox()
-        self.live_status.addItems(["全部", "未开始", "进行中", "已结束"])
-        WidgetUtils.set_combo_style(self.live_status)
-        row1_layout.addWidget(self.live_status)
-        
-        layout.addLayout(row1_layout)
-        
-        # 第二行
-        row2_layout = QHBoxLayout()
-        
-        # 直播时间
-        row2_layout.addWidget(QLabel("直播时间:"))
-        self.live_time = QLineEdit()
-        WidgetUtils.set_input_style(self.live_time)
-        row2_layout.addWidget(self.live_time)
-        
-        # 搜索按钮
-        search_btn = QPushButton("搜索")
-        search_btn.setObjectName("primaryButton")
-        search_btn.clicked.connect(self.search)
-        row2_layout.addWidget(search_btn)
-        
-        layout.addLayout(row2_layout)
-        
-        return group
-        
+    def _on_time_changed(self):
+        """时间变化事件处理"""
+        try:
+            start = self.start_time.dateTime()
+            end = self.end_time.dateTime()
+            
+            # 确保结束时间不早于开始时间
+            if end <= start:
+                end = start.addSecs(3600)  # 默认至少1小时
+                self.end_time.setDateTime(end)
+                return
+            
+            # 计算时间差（秒）
+            duration = start.secsTo(end)
+            
+            # 限制最大时长为24小时
+            if duration > 24 * 3600:
+                end = start.addSecs(24 * 3600)
+                self.end_time.setDateTime(end)
+                duration = 24 * 3600
+            
+            # 更新时长显示
+            self.duration.setValue(duration)
+            
+        except Exception as e:
+            ErrorHandler.handle_error(e, self, "计算时长失败")
+
     @PerformanceManager.measure_operation("validate_input")
     def _validate_input(self) -> bool:
         """验证输入"""
         try:
             # 验证主播ID
-            if not self.anchor_input.text().strip():
+            if not self.anchor_combo.currentText().strip():
                 ErrorHandler.handle_warning("请输入主播ID", self)
                 return False
                 
@@ -226,6 +350,18 @@ class LiveBookingPage(QWidget):
                 return False
             if len(title) > 20:
                 ErrorHandler.handle_warning("直播标题不能超过20个字符", self)
+                return False
+                
+            # 验证时间
+            start = self.start_time.dateTime()
+            end = self.end_time.dateTime()
+            if end <= start:
+                ErrorHandler.handle_warning("结束时间必须晚于开始时间", self)
+                return False
+            
+            duration = start.secsTo(end)
+            if duration > 24 * 3600:
+                ErrorHandler.handle_warning("直播时长不能超过24小时", self)
                 return False
                 
             # 验证直播描述
@@ -261,7 +397,7 @@ class LiveBookingPage(QWidget):
                 
             # 获取输入数据
             data = {
-                "anchor_userid": self.anchor_input.text().strip(),
+                "anchor_userid": self.anchor_combo.currentData() or self.anchor_combo.currentText().strip(),
                 "theme": self.title_input.text().strip(),
                 "living_start": int(self.start_time.dateTime().toSecsSinceEpoch()),
                 "living_duration": self.duration.value(),
@@ -270,6 +406,22 @@ class LiveBookingPage(QWidget):
                 "agentid": self.db_manager.get_current_agent_id()
             }
             
+            # 显示确认对话框
+            reply = ErrorHandler.handle_question(
+                f"确认创建直播？\n\n"
+                f"主播: {self.anchor_combo.currentText()}\n"
+                f"标题: {data['theme']}\n"
+                f"开始时间: {self.start_time.dateTime().toString('yyyy-MM-dd hh:mm:ss')}\n"
+                f"时长: {data['living_duration']}秒\n"
+                f"类型: {self.type_combo.currentText()}\n"
+                f"描述: {data['description']}",
+                self,
+                "创建确认"
+            )
+            
+            if not reply:
+                return
+                
             # 创建直播
             result = self.wecom_api.create_live(**data)
             
@@ -292,9 +444,6 @@ class LiveBookingPage(QWidget):
                 # 添加淡出动画
                 AnimationManager.fade_out(self)
                 
-                # 跳转到直播列表页面
-                self.parent().switch_to_live_list()
-                
             else:
                 ErrorHandler.handle_error(
                     Exception(result["errmsg"]),
@@ -305,20 +454,15 @@ class LiveBookingPage(QWidget):
         except Exception as e:
             ErrorHandler.handle_error(e, self, "保存直播信息失败")
             
-    def _on_cancel(self):
-        """取消操作"""
-        # 添加淡出动画
-        AnimationManager.fade_out(self)
-        self._clear_form()
-        
     def _clear_form(self):
         """清空表单"""
-        self.anchor_input.clear()
         self.title_input.clear()
-        self.start_time.setDateTime(QDateTime.currentDateTime().addSecs(3600))
-        self.duration.setValue(3600)
+        self.start_time.setDateTime(QDateTime.currentDateTime().addSecs(600))
+        self.end_time.setDateTime(QDateTime.currentDateTime().addSecs(7800))
+        self.duration.setValue(7200)
         self.type_combo.setCurrentText("企业培训")
         self.desc_input.clear()
+        self._load_users()  # 重新加载用户列表
         
     def save_live_info(self, livingid: str, data: dict):
         """保存直播信息到数据库"""
