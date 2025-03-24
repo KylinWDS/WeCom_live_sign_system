@@ -26,6 +26,9 @@ from ...utils.network import NetworkUtils
 from ...models.corporation import Corporation
 from ...models.user import User
 
+# API导入
+from ...api.wecom import WeComAPI
+
 logger = get_logger(__name__)
 
 class LoginWindow(QMainWindow):
@@ -128,7 +131,6 @@ class LoginWindow(QMainWindow):
         self.copy_ip_btn.setStyleSheet("""
             QLabel {
                 color: #1890ff;
-                cursor: pointer;
                 padding: 0 5px;
             }
             QLabel:hover {
@@ -136,7 +138,8 @@ class LoginWindow(QMainWindow):
                 text-decoration: underline;
             }
         """)
-        self.copy_ip_btn.mousePressEvent = lambda e: self.copy_ip()
+        self.copy_ip_btn.setCursor(Qt.PointingHandCursor)  # 设置鼠标指针样式
+        self.copy_ip_btn.mousePressEvent = lambda e: self.copy_ip()  # 设置点击事件
         ip_layout.addWidget(self.copy_ip_btn)
         
         # 添加警告图标和提示
@@ -327,6 +330,51 @@ class LoginWindow(QMainWindow):
                 try:
                     user = session.query(User).filter_by(login_name=username).first()
                     if user:
+                        # 非root-admin用户需要测试企业微信API连通性
+                        if username.lower() != "root-admin":
+                            try:
+                                # 获取企业信息
+                                corp = None
+                                wecom_api = None
+                                
+                                # 优先使用用户ID和前端传递的企业名称查询企业模型
+                                logger.info(f"使用企业名称[{corpname}]和用户企业ID[{user.corpid}]查询企业信息")
+                                corp = session.query(Corporation).filter_by(name=corpname, corp_id=user.corpid, status=True).first()
+                                # 如果仍然没有有效的企业信息，提示用户联系管理员
+                                if not corp:
+                                    error_msg = "无法获取有效的企业信息，请联系超级管理员(root-admin)登录账户维护"
+                                    logger.warning(error_msg)
+                                    QMessageBox.warning(self, "企业信息缺失", error_msg)
+                                    return
+                                logger.info(f"找到企业信息: {corp.name}")
+                                # 创建WeComAPI实例
+                                wecom_api = WeComAPI(
+                                    corpid=corp.corp_id,
+                                    corpsecret=corp.corp_secret,
+                                    agent_id=corp.agent_id
+                                )
+                                
+                                # 用于API测试的用户ID
+                                user_id = user.wecom_code if user.wecom_code else user.login_name
+                                
+                                # 测试企业微信API连通性
+                                logger.info(f"正在测试企业微信API连通性: 用户={user_id}")
+                                wecom_api.test_connection(user_id)
+                                logger.info("企业微信API连通性测试成功")
+                                
+                            except Exception as e:
+                                error_message = str(e)
+                                logger.error(f"企业微信API连通性测试失败: {error_message}")
+                                
+                                # 使用错误处理器处理企业微信API错误
+                                from src.utils.error_handler import ErrorHandler
+                                error_handler = ErrorHandler()
+                                continue_login = error_handler.handle_wecom_api_error(e, self, self.db_manager)
+                                
+                                if not continue_login:
+                                    return
+                                # 如果用户选择继续使用，则继续创建主窗口
+                        
                         # 创建主窗口并保持会话
                         self.main_window = MainWindow(
                             user,  # 传递完整的用户对象

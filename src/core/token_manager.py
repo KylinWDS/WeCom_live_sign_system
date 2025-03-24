@@ -14,6 +14,7 @@ class TokenManager:
         self._expires_at = None
         self._corpid = None
         self._corpsecret = None
+        self._agent_id = None
         
         # 监控统计
         self._stats = {
@@ -28,15 +29,17 @@ class TokenManager:
             "response_times": []  # 响应时间记录
         }
     
-    def set_credentials(self, corpid: str, corpsecret: str):
+    def set_credentials(self, corpid: str, corpsecret: str, agent_id: str = None):
         """设置企业凭证
         
         Args:
             corpid: 企业ID
             corpsecret: 企业应用Secret
+            agent_id: 应用ID，可选
         """
         self._corpid = corpid
         self._corpsecret = corpsecret
+        self._agent_id = agent_id
         self._access_token = None
         self._expires_at = None
         
@@ -164,4 +167,12 @@ class TokenManager:
             logger.info(f"过期时间: {stats['token_status']['expires_at']}")
             logger.info(f"剩余时间: {stats['token_status']['time_to_expire']}秒")
         else:
-            logger.warning("Token 状态: 无效") 
+            logger.warning("Token 状态: 无效")
+
+    def get_agent_id(self) -> str:
+        """获取应用ID
+        
+        Returns:
+            str: 应用ID，如果未设置则返回None
+        """
+        return self._agent_id 

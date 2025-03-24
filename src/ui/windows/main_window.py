@@ -78,11 +78,13 @@ class MainWindow(QMainWindow):
                 corp = corporations[0]  # 使用第一个企业的信息
                 corp_info = {
                     'corp_id': corp.corp_id,
-                    'corp_secret': corp.corp_secret
+                    'corp_secret': corp.corp_secret,
+                    'agent_id': corp.agent_id
                 }
                 self.wecom_api = WeComAPI(
                     corpid=corp_info['corp_id'],
-                    corpsecret=corp_info['corp_secret']
+                    corpsecret=corp_info['corp_secret'],
+                    agent_id=corp_info['agent_id']
                 )
             else:
                 # 如果数据库中没有企业信息，从配置文件获取
@@ -91,7 +93,8 @@ class MainWindow(QMainWindow):
                     corp = corporations[0]  # 使用第一个企业的信息
                     self.wecom_api = WeComAPI(
                         corpid=corp["corpid"],
-                        corpsecret=corp["corpsecret"]
+                        corpsecret=corp["corpsecret"],
+                        agent_id=corp.get("agentid")
                     )
                 else:
                     self.wecom_api = None
@@ -166,6 +169,10 @@ class MainWindow(QMainWindow):
         
         # 文件菜单
         file_menu = menubar.addMenu("文件")
+        
+        # 重新登录动作
+        relogin_action = file_menu.addAction("重新登录")
+        relogin_action.triggered.connect(self.relogin)
         
         # 退出动作
         exit_action = file_menu.addAction("退出")
@@ -343,3 +350,32 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"关闭数据库会话时发生错误: {str(e)}")
         super().closeEvent(event)
+
+    def relogin(self):
+        """重新登录
+        关闭当前窗口，打开登录窗口
+        """
+        try:
+            # 关闭会话
+            if self.db_session:
+                self.db_session.close()
+                
+            # 导入QApplication来获取应用实例
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            
+            # 创建登录窗口
+            from ..windows.login_window import LoginWindow
+            
+            # 创建登录窗口并保存引用到应用程序的属性中
+            app._login_window = LoginWindow(self.auth_manager, self.config_manager, self.db_manager)
+            app._login_window.show()
+            
+            logger.info("用户请求重新登录")
+            
+            # 关闭当前窗口
+            self.close()
+            
+        except Exception as e:
+            logger.error(f"重新登录失败: {str(e)}")
+            QMessageBox.critical(self, "错误", f"重新登录失败: {str(e)}")

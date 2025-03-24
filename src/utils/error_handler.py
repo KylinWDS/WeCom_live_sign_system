@@ -128,7 +128,11 @@ class ErrorHandler(QObject):
             self.critical_error.emit(error_info["type"], error_info["message"])
             
             # 显示错误对话框
-            QMessageBox.critical(None, "严重错误", f"{context}\n{error_info['message']}")
+            QMessageBox.critical(
+                None,  # 父窗口参数为 None
+                "严重错误",
+                f"{context}\n{error_info['message']}"
+            )
             
         except Exception as e:
             logger.critical(f"严重错误处理过程中发生异常: {str(e)}")
@@ -142,7 +146,11 @@ class ErrorHandler(QObject):
         """
         try:
             # 显示错误对话框
-            QMessageBox.critical(None, "错误", f"{context}\n{str(error)}")
+            QMessageBox.critical(
+                None,  # 父窗口参数为 None
+                "错误",
+                f"{context}\n{str(error)}"
+            )
             
         except Exception as e:
             logger.error(f"未知错误处理过程中发生异常: {str(e)}")
@@ -421,6 +429,18 @@ class ErrorHandler(QObject):
             logger.error(f"处理数据库错误时发生异常: {str(e)}", exc_info=True)
 
     @staticmethod
+    def is_ip_whitelist_error(error_msg: str) -> bool:
+        """判断是否为IP白名单错误
+        
+        Args:
+            error_msg: 错误消息
+            
+        Returns:
+            bool: 是否为IP白名单错误
+        """
+        return "not allow to access from your ip" in error_msg or "60020" in error_msg
+    
+    @staticmethod
     def handle_ip_restriction_error(error: Exception, parent=None, db_manager: Optional[DatabaseManager] = None):
         """处理IP限制错误
         
@@ -428,14 +448,33 @@ class ErrorHandler(QObject):
             error: 异常对象
             parent: 父窗口
             db_manager: 数据库管理器
+            
+        Returns:
+            bool: 用户是否选择继续使用
         """
         error_msg = str(error)
+        
+        # 优化的IP白名单错误判断条件
+        if not ErrorHandler.is_ip_whitelist_error(error_msg):
+            # 如果不是IP白名单错误，直接显示一般错误提示
+            QMessageBox.warning(
+                parent, 
+                "API连接失败", 
+                f"企业微信API连接失败，部分功能可能无法使用。\n\n错误详情: {error_msg}"
+            )
+            return True
+            
         ip = NetworkUtils.extract_ip_from_error(error_msg)
         
         if ip and db_manager:
-            # 记录IP
-            ip_record_manager = IPRecordManager(db_manager.session)
-            ip_record_manager.add_ip(ip, 'error')
+            try:
+                # 使用get_session创建新会话而不是直接使用session属性
+                with db_manager.get_session() as session:
+                    ip_record_manager = IPRecordManager(session)
+                    ip_record_manager.add_ip(ip, 'error')
+                    logger.info(f"IP白名单错误，已将IP [{ip}] 记录到数据库(类型: error)")
+            except Exception as e:
+                logger.error(f"记录IP到数据库失败: {str(e)}")
         
         if ip:
             message = f"""检测到IP限制错误，您的IP地址为：{ip}
@@ -479,10 +518,48 @@ https://work.weixin.qq.com/wework_admin/frame#apps/modApiApp
         copy_btn = dialog.addButton("复制IP", QMessageBox.ButtonRole.ActionRole)
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(ip if ip else ""))
         
-        open_btn = dialog.addButton("打开配置页面", QMessageBox.ButtonRole.ActionRole)
+        open_btn = dialog.addButton("配置说明", QMessageBox.ButtonRole.ActionRole)
         open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://work.weixin.qq.com/wework_admin/frame#apps/modApiApp")))
         
-        dialog.addButton("确定", QMessageBox.ButtonRole.AcceptRole)
+        # 修改按钮名称
+        dialog.addButton("继续使用", QMessageBox.ButtonRole.AcceptRole)
+        dialog.addButton("取消", QMessageBox.ButtonRole.RejectRole)
         
-        # 显示对话框
-        dialog.exec() 
+        # 显示对话框并返回结果
+        result = dialog.exec()
+        
+        # 返回用户是否选择继续使用
+        return result == QMessageBox.ButtonRole.AcceptRole
+        
+    # 添加一个实例方法，调用静态方法
+    def handle_wecom_api_error(self, error: Exception, parent=None, db_manager: Optional[DatabaseManager] = None):
+        """处理企业微信API错误
+        
+        Args:
+            error: 异常对象
+            parent: 父窗口
+            db_manager: 数据库管理器
+            
+        Returns:
+            bool: 用户是否选择继续使用
+        """
+        error_msg = str(error)
+        
+        # 记录错误信息
+        logger.error(f"企业微信API错误: {error_msg}")
+        
+        # 发送信号
+        self.error_occurred.emit("WeComAPIError", error_msg)
+        
+        # 检查是否为IP白名单错误
+        if self.is_ip_whitelist_error(error_msg):
+            # 如果是IP白名单错误，调用专门的处理方法
+            return self.handle_ip_restriction_error(error, parent, db_manager)
+        else:
+            # 其他企业微信API错误
+            QMessageBox.warning(
+                parent, 
+                "API连接失败", 
+                f"企业微信API连接失败，部分功能可能无法使用。\n\n错误详情: {error_msg}"
+            )
+            return True 

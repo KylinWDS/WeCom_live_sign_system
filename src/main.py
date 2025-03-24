@@ -19,11 +19,14 @@ from .core.auth_manager import AuthManager
 # 工具类导入
 from .utils.logger import get_logger, setup_logger
 
+# 应用上下文导入
+from .app import init_app_context
+
 
 def show_error_dialog(title: str, message: str):
     """显示错误对话框"""
     msg_box = QMessageBox()
-    msg_box.setIcon(QMessageBox.Critical)
+    msg_box.setIcon(QMessageBox.Icon.Critical)
     msg_box.setWindowTitle(title)
     msg_box.setText(message)
     msg_box.setDetailedText(traceback.format_exc())
@@ -109,6 +112,9 @@ def main():
             # 创建数据库管理器和认证管理器（空配置）
             db_manager = DatabaseManager()
             auth_manager = AuthManager(db_manager)
+            
+            # 初始化应用上下文
+            init_app_context(db_manager, config_manager, auth_manager)
 
             # 首次运行，显示初始化向导
             wizard = InitWizard(db_manager, config_manager, auth_manager)
@@ -120,6 +126,9 @@ def main():
             config_manager = wizard.config_manager
             db_manager = wizard.db_manager
             auth_manager = wizard.auth_manager
+            
+            # 更新应用上下文
+            init_app_context(db_manager, config_manager, auth_manager)
 
             # 使用用户配置的日志设置
             paths = config_manager.config.get("paths", {})
@@ -149,9 +158,12 @@ def main():
 
             # 正常启动时只检查并创建缺失的表
             db_manager.init_db(force_recreate=False)
-
-        # 初始化认证管理器
-        auth_manager = AuthManager(db_manager)
+            
+            # 初始化认证管理器
+            auth_manager = AuthManager(db_manager)
+            
+            # 初始化应用上下文
+            init_app_context(db_manager, config_manager, auth_manager)
 
         # 显示登录窗口
         login_window = LoginWindow(auth_manager, config_manager, db_manager)

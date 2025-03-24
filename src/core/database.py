@@ -111,35 +111,47 @@ class DatabaseManager:
             return False
             
     def create_tables(self) -> bool:
-        """创建数据库表"""
-        if not self.initialized:
-            logger.error("数据库未初始化")
-            return False
-            
+        """创建数据库表
+        
+        Returns:
+            bool: 是否成功创建表
+        """
         try:
-            logger.info("开始创建数据库表...")
-            # 导入所有模型类，确保它们被注册到Base.metadata中
-            from src.models.user import User, UserRole
-            from src.models.living import Living, WatchStat
+            if not self.initialized:
+                logger.error("数据库未初始化")
+                return False
+            
+            # 导入所有模型类以确保Base.metadata包含所有表定义
+            from src.models.base import Base
+            from src.models.user import User
             from src.models.live_booking import LiveBooking
             from src.models.live_viewer import LiveViewer
             from src.models.sign_record import SignRecord
-            from src.models.sign import Sign
+            from src.models.living import Living
+            from src.models.watch_stat import WatchStat
+            from src.models.ip_record import IPRecord
+            from src.models.setting import Setting
+            from src.models.corporation import Corporation
+            from src.models.config_change import ConfigChange
+            from src.models.operation_log import OperationLog
             
-            # 获取所有要创建的表
+            # 动态获取所有模型表
+            # 使用Base.metadata.tables获取所有注册的表
             tables = Base.metadata.tables
-            logger.info(f"需要创建的表: {', '.join(tables.keys())}")
             
-            # 创建表
-            Base.metadata.create_all(self.engine)
-            
-            # 验证表是否创建成功
+            # 检查表是否已存在
             inspector = inspect(self.engine)
             created_tables = inspector.get_table_names()
-            logger.info(f"已创建的表: {', '.join(created_tables)}")
             
-            if set(tables.keys()) <= set(created_tables):
-                logger.info("数据库表创建成功")
+            # 创建未存在的表
+            for table_name, table_obj in tables.items():
+                if table_name not in created_tables:
+                    table_obj.create(self.engine, checkfirst=True)
+                    logger.info(f"创建表: {table_name}")
+            
+            # 再次检查表是否都已创建
+            created_tables = inspector.get_table_names()
+            if set(tables.keys()).issubset(set(created_tables)):
                 return True
             else:
                 missing_tables = set(tables.keys()) - set(created_tables)
@@ -149,18 +161,7 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"创建数据库表失败: {str(e)}")
             return False
-            
-    def get_session(self) -> Session:
-        """获取数据库会话
-        
-        Returns:
-            Session: 数据库会话
-        """
-        if not self.initialized:
-            raise RuntimeError("数据库未初始化")
-            
-        return self.Session()
-        
+    
     def close(self):
         """关闭数据库连接"""
         if self.Session:
@@ -229,7 +230,19 @@ class DatabaseManager:
     
     @contextmanager
     def get_session(self):
-        """获取数据库会话的上下文管理器"""
+        """获取数据库会话的上下文管理器
+        
+        如果数据库未初始化，将抛出RuntimeError异常
+        
+        Yields:
+            Session: 数据库会话
+        
+        Raises:
+            RuntimeError: 数据库未初始化时抛出
+        """
+        if not self.initialized:
+            raise RuntimeError("数据库未初始化")
+            
         session = self.Session()
         try:
             yield session
