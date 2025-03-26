@@ -25,16 +25,14 @@ logger = get_logger(__name__)
 class LiveBookingPage(QWidget):
     """直播预约页面"""
     
-    def __init__(self, db_manager: DatabaseManager, wecom_api: WeComAPI, task_manager: TaskManager):
+    def __init__(self, db_manager: DatabaseManager, wecom_api: WeComAPI, task_manager: TaskManager, user_id=None):
         super().__init__()
         self.db_manager = db_manager
         self.wecom_api = wecom_api
         self.task_manager = task_manager
         self.performance_manager = PerformanceManager()
         self.error_handler = ErrorHandler()
-        self.current_user = None
-        with self.db_manager.get_session() as session:
-            self.current_user = session.query(User).order_by(User.last_login.desc()).first()
+        self.user_id = user_id  # 用户ID而不是用户对象
         self.init_ui()
         
     def init_ui(self):
@@ -253,19 +251,22 @@ class LiveBookingPage(QWidget):
     def _load_users(self):
         """加载用户列表"""
         try:
-            if not self.current_user:
-                ErrorHandler.handle_warning("无法获取当前用户信息", self)
-                return
-            
             with self.db_manager.get_session() as session:
-                # 刷新当前用户信息
-                current_user = session.merge(self.current_user)
-                session.refresh(current_user)
+                # 获取当前用户信息（如果有用户ID）
+                current_user = None
+                if self.user_id:
+                    current_user = session.query(User).filter_by(userid=self.user_id).first()
+                
+                # 如果无法获取当前用户，获取最后登录的用户作为默认值
+                if not current_user:
+                    current_user = session.query(User).order_by(User.last_login.desc()).first()
+                    if current_user:
+                        self.user_id = current_user.userid
                 
                 # 清空下拉列表
                 self.anchor_combo.clear()
                 
-                if current_user.login_name.lower() == "root-admin":
+                if current_user and current_user.login_name.lower() == "root-admin":
                     # 如果是超级管理员，加载除root-admin外的所有用户
                     users = session.query(User).filter(
                         User.login_name != "root-admin",
@@ -280,32 +281,22 @@ class LiveBookingPage(QWidget):
                         display_name = f"{user.name} ({user_id}|{user.corpname or '未知企业'})"
                         self.anchor_combo.addItem(display_name, user_id)
                 else:
-                    # 普通用户只能看到同企业的用户
-                    if not current_user.corpid:
-                        ErrorHandler.handle_warning("无法获取当前用户所属企业", self)
-                        return
-                    
-                    # 获取当前企业的所有用户
-                    users = session.query(User).filter_by(
-                        corpid=current_user.corpid,
-                        is_active=True  # 只获取激活的用户
-                    ).all()
-                    
-                    # 添加用户到下拉列表
-                    for user in users:
-                        # 使用wecom_code或login_name作为值
-                        user_id = user.wecom_code if user.wecom_code else user.login_name
-                        self.anchor_combo.addItem(f"{user.name} ({user_id})", user_id)
+                    # 非超级管理员，只显示自己
+                    if current_user:
+                        user_id = current_user.wecom_code if current_user.wecom_code else current_user.login_name
+                        display_name = f"{current_user.name} ({user_id}|{current_user.corpname or '未知企业'})"
+                        self.anchor_combo.addItem(display_name, user_id)
                 
                 # 设置当前用户为默认值（如果不是root-admin的话）
-                if current_user.login_name.lower() != "root-admin":
+                if current_user and current_user.login_name.lower() != "root-admin":
                     current_user_id = current_user.wecom_code if current_user.wecom_code else current_user.login_name
                     index = self.anchor_combo.findData(current_user_id)
                     if index >= 0:
                         self.anchor_combo.setCurrentIndex(index)
                         
         except Exception as e:
-            ErrorHandler.handle_error(e, self, "加载用户列表失败")
+            logger.error(f"加载用户列表失败: {str(e)}")
+            self.error_handler.handle_error(e, self, "加载用户列表失败")
         
     def _on_time_changed(self):
         """时间变化事件处理"""

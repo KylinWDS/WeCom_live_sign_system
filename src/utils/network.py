@@ -8,7 +8,7 @@ from typing import List, Dict, Optional, Tuple, Any
 from src.utils.logger import get_logger
 from src.core.database import DatabaseManager
 from src.core.ip_record_manager import IPRecordManager
-from src.app import get_app_context
+from src.app import get_app_context, ResourceNotInitializedError
 
 logger = get_logger(__name__)
 
@@ -37,34 +37,37 @@ class NetworkUtils:
             try:
                 # 获取应用上下文中的数据库管理器实例
                 app_context = get_app_context()
-                if app_context and hasattr(app_context, 'db_manager'):
-                    db_manager = app_context.db_manager
-                    
-                    # 确认数据库已初始化
-                    if db_manager.initialized:
-                        with db_manager.get_session() as session:
-                            ip_manager = IPRecordManager(session)
-                            
-                            # 保存最可靠的IP为manual类型
-                            if ip and isinstance(ip, str):
-                                ip_manager.add_ip(ip, 'manual')
-                                logger.info(f"将最可靠IP [{ip}] 添加到数据库 (类型: manual)")
-                            
-                            # 获取并保存其他检测到的IP
-                            all_ips = details.get('all_ips', {})
-                            if all_ips and isinstance(all_ips, dict):
-                                for detected_ip, count in all_ips.items():
-                                    if detected_ip != ip:  # 跳过已添加为manual的IP
-                                        try:
-                                            if detected_ip and isinstance(detected_ip, str):
-                                                ip_manager.add_ip(detected_ip, 'history')
-                                                logger.info(f"将探测到的其他IP [{detected_ip}] 添加到数据库 (类型: history)")
-                                        except Exception as inner_e:
-                                            logger.warning(f"添加IP [{detected_ip}] 到数据库失败: {str(inner_e)}")
-                    else:
-                        logger.error("数据库管理器未初始化")
+                if app_context:
+                    try:
+                        db_manager = app_context.db_manager
+                        
+                        # 确认数据库已初始化
+                        if db_manager.initialized:
+                            with db_manager.get_session() as session:
+                                ip_manager = IPRecordManager(session)
+                                
+                                # 保存最可靠的IP为manual类型
+                                if ip and isinstance(ip, str):
+                                    ip_manager.add_ip(ip, 'manual')
+                                    logger.info(f"将最可靠IP [{ip}] 添加到数据库 (类型: manual)")
+                                
+                                # 获取并保存其他检测到的IP
+                                all_ips = details.get('all_ips', {})
+                                if all_ips and isinstance(all_ips, dict):
+                                    for detected_ip, count in all_ips.items():
+                                        if detected_ip != ip:  # 跳过已添加为manual的IP
+                                            try:
+                                                if detected_ip and isinstance(detected_ip, str):
+                                                    ip_manager.add_ip(detected_ip, 'history')
+                                                    logger.info(f"将探测到的其他IP [{detected_ip}] 添加到数据库 (类型: history)")
+                                            except Exception as inner_e:
+                                                logger.warning(f"添加IP [{detected_ip}] 到数据库失败: {str(inner_e)}")
+                        else:
+                            logger.error("数据库管理器未初始化")
+                    except ResourceNotInitializedError:
+                        logger.error("数据库管理器尚未初始化")
                 else:
-                    logger.error("无法获取应用上下文或数据库管理器")
+                    logger.error("无法获取应用上下文")
             except Exception as e:
                 logger.error(f"保存IP到数据库失败: {str(e)}")
             

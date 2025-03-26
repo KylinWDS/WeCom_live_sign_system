@@ -52,6 +52,16 @@ class User(Base):
     config_changes = relationship('ConfigChange', back_populates='user')
     operation_logs = relationship('OperationLog', back_populates='user')
     
+    @property
+    def username(self):
+        """兼容性属性，返回login_name"""
+        return self.login_name
+    
+    @username.setter
+    def username(self, value):
+        """兼容性属性设置器，设置login_name"""
+        self.login_name = value
+    
     def to_dict(self) -> dict:
         """转换为字典"""
         return {

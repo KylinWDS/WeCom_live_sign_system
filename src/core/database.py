@@ -5,10 +5,11 @@ from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker, scoped_session, Session
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.exc import SQLAlchemyError
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
+import threading
 from src.utils.logger import get_logger
 from src.models.base import Base
 from src.models import User, UserRole
@@ -39,11 +40,32 @@ def get_db_connection_config() -> Dict[str, Any]:
 class DatabaseManager:
     """数据库管理器"""
     
+    # 单例模式支持
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls, *args, **kwargs):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(DatabaseManager, cls).__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
+    
     def __init__(self):
+        # 防止重复初始化
+        if hasattr(self, '_initialized') and self._initialized:
+            return
+            
         self.engine = None
         self.Session = None
         self.initialized = False
         self.db_config = None
+        
+        # 添加会话计数和线程锁
+        self._active_sessions = 0
+        self._session_lock = threading.Lock()
+        
+        self._initialized = True
         
     def initialize(self, db_config: Dict[str, Any]) -> bool:
         """初始化数据库
@@ -99,7 +121,7 @@ class DatabaseManager:
             
             # 创建会话工厂
             logger.info("创建会话工厂...")
-            self.Session = scoped_session(sessionmaker(bind=self.engine))
+            self.Session = sessionmaker(bind=self.engine)
             
             # 标记为已初始化
             self.initialized = True
@@ -244,14 +266,58 @@ class DatabaseManager:
             raise RuntimeError("数据库未初始化")
             
         session = self.Session()
+        
+        # 增加活跃会话计数
+        with self._session_lock:
+            self._active_sessions += 1
+            
         try:
             yield session
             session.commit()
-        except Exception:
+        except Exception as e:
             session.rollback()
+            logger.error(f"会话操作出错: {str(e)}")
             raise
         finally:
             session.close()
+            # 减少活跃会话计数
+            with self._session_lock:
+                self._active_sessions -= 1
+    
+    def get_active_sessions_count(self):
+        """获取当前活跃会话数量
+        
+        Returns:
+            int: 活跃会话数量
+        """
+        with self._session_lock:
+            return self._active_sessions
+    
+    def merge_user(self, session, user_obj):
+        """安全地合并用户对象到当前会话
+        
+        Args:
+            session: 数据库会话
+            user_obj: 用户对象或用户ID
+            
+        Returns:
+            User: 合并后的用户对象或None
+        """
+        if user_obj is None:
+            return None
+            
+        try:
+            from ..models.user import User
+            
+            # 如果传入的是ID，则查询用户对象
+            if isinstance(user_obj, int):
+                return session.query(User).get(user_obj)
+            
+            # 否则合并到当前会话
+            return session.merge(user_obj)
+        except Exception as e:
+            logger.error(f"合并用户对象失败: {str(e)}")
+            return None
     
     def backup(self) -> str:
         """数据库备份
@@ -383,7 +449,7 @@ class DatabaseManager:
                 pool_recycle=self.db_config['pool_recycle'],
                 echo=self.db_config['echo']
             )
-            self.Session = scoped_session(sessionmaker(bind=self.engine))
+            self.Session = sessionmaker(bind=self.engine)
             
             logger.info(f"数据库路径更新成功: {new_path}")
             return True
@@ -514,8 +580,15 @@ class DatabaseManager:
             logger.error(f"获取签到记录失败: {str(e)}")
             raise
     
-    def get_live_stats(self) -> Dict[str, Any]:
-        """获取直播统计数据"""
+    def get_live_stats(self, days: int = 30) -> Dict[str, Any]:
+        """获取直播统计数据
+        
+        Args:
+            days: 统计的天数，默认为30天
+            
+        Returns:
+            Dict[str, Any]: 统计结果
+        """
         try:
             stats = {}
             

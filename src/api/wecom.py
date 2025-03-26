@@ -22,6 +22,7 @@ class WeComAPI:
         self.token_manager.set_credentials(corpid, corpsecret, agent_id)
         self.error_handler = ErrorHandler()
         self.performance_manager = PerformanceManager()
+        self._session = None
         
         # API 调用统计
         self._api_stats = {
@@ -121,6 +122,16 @@ class WeComAPI:
             response_time = time.time() - start_time
             logger.debug(f"API 响应时间: {endpoint} - {response_time:.3f}秒")
             
+    def get_session(self):
+        """获取或创建requests会话，用于多次请求复用连接
+        
+        Returns:
+            requests.Session: requests会话对象
+        """
+        if self._session is None:
+            self._session = requests.Session()
+        return self._session
+    
     def get_api_stats(self) -> dict:
         """获取 API 调用统计信息
         
@@ -281,4 +292,5 @@ class WeComAPI:
             else:
                 # 记录一般错误
                 self.error_handler.handle_error(e, "测试企业微信接口连接")
-            raise 
+            raise
+    

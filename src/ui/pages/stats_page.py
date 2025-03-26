@@ -23,9 +23,9 @@ logger = get_logger(__name__)
 class StatsPage(QWidget):
     """数据统计页面"""
     
-    def __init__(self, parent=None):
+    def __init__(self, db_manager, parent=None):
         super().__init__(parent)
-        self.db_manager = DatabaseManager()
+        self.db_manager = db_manager
         self.init_ui()
         self.load_data()
     

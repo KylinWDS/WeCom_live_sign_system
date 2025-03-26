@@ -2,7 +2,7 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QMessageBox, QTabWidget, QStackedWidget,
-    QLineEdit, QComboBox, QMenuBar, QMenu, QStatusBar
+    QLineEdit, QComboBox, QMenuBar, QMenu, QStatusBar, QTabBar
 )
 from PySide6.QtCore import Qt, QRect
 from PySide6.QtGui import QIcon, QGuiApplication
@@ -13,11 +13,6 @@ from ..managers.theme_manager import ThemeManager
 from ..utils.widget_utils import WidgetUtils
 from ..managers.animation import AnimationManager
 from ..pages.home_page import HomePage
-from ..pages.stats_page import StatsPage
-from ..pages.settings_page import SettingsPage
-from ..pages.live_booking_page import LiveBookingPage
-from ..pages.live_list_page import LiveListPage
-from ..pages.user_management_page import UserManagementPage
 
 # 核心功能导入
 from ...core.config_manager import ConfigManager
@@ -59,56 +54,62 @@ class MainWindow(QMainWindow):
         self.config_manager = config_manager
         self.auth_manager = auth_manager
         
-        # 创建新的会话并重新获取用户对象
-        self.db_session = self.db_manager.Session()
-        self.user = self.db_session.merge(user)
-        
-        # 设置当前用户到配置管理器
-        self.config_manager.set_current_user(self.user)
-        
-        # 初始化主题管理器
-        self.theme_manager = ThemeManager()
-        
-        # 获取企业信息
-        try:
-            # 先从数据库获取企业信息
-            corporations = self.db_session.query(Corporation).filter_by(status=True).all()
-            if corporations:
-                # 在会话关闭前获取所有需要的数据
-                corp = corporations[0]  # 使用第一个企业的信息
-                corp_info = {
-                    'corp_id': corp.corp_id,
-                    'corp_secret': corp.corp_secret,
-                    'agent_id': corp.agent_id
-                }
-                self.wecom_api = WeComAPI(
-                    corpid=corp_info['corp_id'],
-                    corpsecret=corp_info['corp_secret'],
-                    agent_id=corp_info['agent_id']
-                )
-            else:
-                # 如果数据库中没有企业信息，从配置文件获取
-                corporations = self.config_manager.get_corporations()
+        # 使用临时会话获取用户信息，不再持久保持会话对象
+        with self.db_manager.get_session() as session:
+            # 合并用户对象到会话
+            user_obj = session.merge(user)
+            
+            # 存储用户ID和基本信息，而不是完整对象
+            self.user_id = user_obj.userid
+            self.user_name = user_obj.name
+            self.user_login_name = user_obj.login_name
+            self.user_role = user_obj.role
+            self.corp_name = user_obj.corpname if user_obj.corpname else "系统管理"
+            
+            # 设置当前用户到认证管理器和配置管理器
+            self.auth_manager.set_current_user(user_obj)
+            self.config_manager.set_current_user(user_obj)
+            
+            # 获取企业信息
+            try:
+                # 从数据库获取企业信息
+                corporations = session.query(Corporation).filter_by(status=True).all()
                 if corporations:
+                    # 获取企业基本信息
                     corp = corporations[0]  # 使用第一个企业的信息
+                    corp_info = {
+                        'corp_id': corp.corp_id,
+                        'corp_secret': corp.corp_secret,
+                        'agent_id': corp.agent_id
+                    }
                     self.wecom_api = WeComAPI(
-                        corpid=corp["corpid"],
-                        corpsecret=corp["corpsecret"],
-                        agent_id=corp.get("agentid")
+                        corpid=corp_info['corp_id'],
+                        corpsecret=corp_info['corp_secret'],
+                        agent_id=corp_info['agent_id']
                     )
                 else:
-                    self.wecom_api = None
-                    logger.warning("未找到企业配置信息")
-        except Exception as e:
-            logger.error(f"获取企业信息失败: {str(e)}")
-            self.wecom_api = None
+                    # 如果数据库中没有企业信息，从配置文件获取
+                    corporations = self.config_manager.get_corporations()
+                    if corporations:
+                        corp = corporations[0]  # 使用第一个企业的信息
+                        self.wecom_api = WeComAPI(
+                            corpid=corp["corpid"],
+                            corpsecret=corp["corpsecret"],
+                            agent_id=corp.get("agentid")
+                        )
+                    else:
+                        self.wecom_api = None
+                        logger.warning("未找到企业配置信息")
+            except Exception as e:
+                logger.error(f"获取企业信息失败: {str(e)}")
+                self.wecom_api = None
         
         # 初始化任务管理器
-        if self.wecom_api is None and self.user.login_name.lower() != 'root-admin':
+        if self.wecom_api is None and self.user_login_name.lower() != 'root-admin':
             QMessageBox.warning(self, "警告", "未找到有效的企业配置信息，部分功能可能无法使用")
         
         # 只有在wecom_api可用或用户是root-admin时才初始化任务管理器
-        if self.wecom_api is not None or self.user.login_name.lower() == 'root-admin':
+        if self.wecom_api is not None or self.user_login_name.lower() == 'root-admin':
             self.task_manager = TaskManager(self.wecom_api, self.db_manager)
         else:
             self.task_manager = None
@@ -119,6 +120,9 @@ class MainWindow(QMainWindow):
         # 应用主题设置
         self._apply_theme()
         
+        # 更新UI状态
+        self.update_ui()
+        
     def _apply_theme(self):
         """应用主题设置"""
         try:
@@ -126,7 +130,7 @@ class MainWindow(QMainWindow):
             theme = self.config_manager.get_theme()
             
             # 应用主题
-            self.theme_manager.apply_theme(theme)
+            logger.info(f"应用主题成功: {theme}")
             
         except Exception as e:
             logger.error(f"应用主题失败: {str(e)}")
@@ -140,28 +144,34 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         
-        # 创建中央窗口
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        # 创建状态栏中的信息标签
+        self.corp_label = QLabel()
+        self.corp_label.setObjectName("statusCorpLabel")
         
-        # 创建主布局
-        layout = QHBoxLayout(central_widget)
-        layout.setContentsMargins(0, 0, 0, 0)
+        self.user_label = QLabel()
+        self.user_label.setObjectName("statusUserLabel")
         
-        # 创建左侧菜单
-        self.create_left_menu()
+        self.disclaimer_label = QLabel("免责声明：本系统仅用于企业内部使用，禁止用于任何商业用途。© 2025 企业微信直播签到系统")
+        self.disclaimer_label.setObjectName("disclaimerLabel")
         
-        # 创建右侧内容区
-        self.content_stack = QStackedWidget()
-        layout.addWidget(self.content_stack)
+        # 添加标签到状态栏
+        self.status_bar.addWidget(self.corp_label)
+        self.status_bar.addWidget(self.user_label, 1)  # 1表示拉伸因子，让用户标签居中
+        self.status_bar.addPermanentWidget(self.disclaimer_label)  # 永久部件，靠右显示
+        
+        # 创建中央窗口 - 使用HomePage
+        self.home_page = HomePage(
+            self.db_manager,
+            self.auth_manager,
+            self.wecom_api,
+            self.task_manager,
+            user_id=self.user_id  # 传递用户ID而不是对象
+        )
+        self.home_page.logout_requested.connect(self.relogin)
+        self.setCentralWidget(self.home_page)
         
         # 设置样式
         self.setStyleSheet(StyleManager.get_main_style())
-        
-        # 如果是root-admin或者wecom_api可用，启用所有按钮
-        buttons_enabled = self.user.login_name.lower() == 'root-admin' or self.wecom_api is not None
-        self.live_booking_btn.setEnabled(buttons_enabled)
-        self.live_list_btn.setEnabled(buttons_enabled)
         
     def create_menu_bar(self):
         """创建菜单栏"""
@@ -169,6 +179,7 @@ class MainWindow(QMainWindow):
         
         # 文件菜单
         file_menu = menubar.addMenu("文件")
+        file_menu.setObjectName("fileMenu")
         
         # 重新登录动作
         relogin_action = file_menu.addAction("重新登录")
@@ -178,121 +189,31 @@ class MainWindow(QMainWindow):
         exit_action = file_menu.addAction("退出")
         exit_action.triggered.connect(self.close)
         
-        # 设置菜单
-        settings_menu = menubar.addMenu("设置")
+        # 系统管理菜单（原为"设置"）
+        system_menu = menubar.addMenu("系统管理")
         
-        # 用户管理动作
-        user_management_action = settings_menu.addAction("用户管理")
-        user_management_action.triggered.connect(self.show_user_management)
+        # 系统设置动作
+        system_settings_action = system_menu.addAction("系统设置")
+        system_settings_action.triggered.connect(self.show_settings)
+        
+        # 添加分隔线
+        system_menu.addSeparator()
+        
+        # 系统监控动作
+        performance_action = system_menu.addAction("性能监控")
+        performance_action.triggered.connect(self.show_performance_monitor)
         
         # 帮助菜单
         help_menu = menubar.addMenu("帮助")
+        help_menu.setObjectName("helpMenu")
         
         # 关于动作
         about_action = help_menu.addAction("关于")
         about_action.triggered.connect(self.show_about)
         
-    def create_left_menu(self):
-        """创建左侧菜单"""
-        # 创建左侧菜单容器
-        left_menu = QWidget()
-        left_menu.setFixedWidth(200)
-        left_menu.setObjectName("leftMenu")
-        
-        # 创建左侧菜单布局
-        layout = QVBoxLayout(left_menu)
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        # 创建菜单按钮
-        self.live_booking_btn = QPushButton("预约直播")
-        self.live_booking_btn.setObjectName("menuButton")
-        self.live_booking_btn.clicked.connect(self.show_live_booking)
-        layout.addWidget(self.live_booking_btn)
-        
-        self.live_list_btn = QPushButton("直播列表")
-        self.live_list_btn.setObjectName("menuButton")
-        self.live_list_btn.clicked.connect(self.show_live_list)
-        layout.addWidget(self.live_list_btn)
-        
-        # 添加设置按钮
-        self.settings_btn = QPushButton("系统设置")
-        self.settings_btn.setObjectName("menuButton")
-        self.settings_btn.clicked.connect(self.show_settings)
-        layout.addWidget(self.settings_btn)
-        
-        # 添加弹性空间
-        layout.addStretch()
-        
-        # 将左侧菜单添加到主布局
-        self.centralWidget().layout().insertWidget(0, left_menu)
-        
-    def show_live_booking(self):
-        """显示直播预约页面"""
-        # 检查权限
-        if not self.check_permission("manage_live"):
-            QMessageBox.warning(self, "警告", "您没有权限访问此功能")
-            return
-            
-        # 检查task_manager是否可用
-        if self.task_manager is None:
-            QMessageBox.warning(self, "警告", "任务管理器未初始化，无法使用此功能")
-            return
-            
-        # 创建页面
-        page = LiveBookingPage(
-            self.db_manager,
-            self.wecom_api,
-            self.task_manager
-        )
-        self.content_stack.addWidget(page)
-        self.content_stack.setCurrentWidget(page)
-        
-    def show_live_list(self):
-        """显示直播列表页面"""
-        # 检查权限
-        if not self.check_permission("view_live"):
-            QMessageBox.warning(self, "警告", "您没有权限访问此功能")
-            return
-            
-        # 检查task_manager是否可用
-        if self.task_manager is None:
-            QMessageBox.warning(self, "警告", "任务管理器未初始化，无法使用此功能")
-            return
-            
-        # 创建页面
-        page = LiveListPage(
-            self.wecom_api,
-            self.task_manager
-        )
-        self.content_stack.addWidget(page)
-        self.content_stack.setCurrentWidget(page)
-        
-    def show_settings(self):
-        """显示设置页面"""
-        # 检查权限
-        if not self.check_permission("manage_settings"):
-            QMessageBox.warning(self, "警告", "您没有权限访问此功能")
-            return
-            
-        # 创建页面
-        page = SettingsPage(
-            self.auth_manager,
-            self.db_manager
-        )
-        self.content_stack.addWidget(page)
-        self.content_stack.setCurrentWidget(page)
-        
-    def show_user_management(self):
-        """显示用户管理页面"""
-        # 检查权限
-        if not self.check_permission("manage_users"):
-            QMessageBox.warning(self, "警告", "您没有权限访问此功能")
-            return
-            
-        # 创建页面
-        page = UserManagementPage(self.auth_manager)
-        self.content_stack.addWidget(page)
-        self.content_stack.setCurrentWidget(page)
+        # 使用手册动作
+        manual_action = help_menu.addAction("使用手册")
+        manual_action.triggered.connect(self.show_manual)
         
     def show_about(self):
         """显示关于对话框"""
@@ -302,64 +223,41 @@ class MainWindow(QMainWindow):
             "企业微信直播签到系统 v0.0.1\n\n"
             "用于管理企业微信直播和签到信息的系统。"
         )
-        
+    
+    def show_manual(self):
+        """显示使用手册"""
+        QMessageBox.information(
+            self, 
+            "使用手册",
+            "企业微信直播签到系统使用手册\n\n"
+            "1. 首页仪表盘：显示系统概览和关键指标\n"
+            "2. 预约直播：创建和管理直播预约\n"
+            "3. 直播列表：查看和管理所有直播\n"
+            "4. 数据统计：查看直播和签到统计数据\n\n"
+            "详细使用说明请参考系统文档。"
+        )
+
     def check_permission(self, permission: str) -> bool:
-        """检查当前用户是否有指定权限
-        
-        Args:
-            permission: 权限名称
-            
-        Returns:
-            是否有权限
-        """
+        """检查当前用户是否有指定权限"""
         try:
-             # 刷新用户对象以确保状态最新
-            self._refresh_user()
-            
-            # 使用当前登录用户
-            if self.user:
-                return self.auth_manager.has_permission(self.user.login_name, permission)
-            return False
+            # 使用新的会话和用户ID检查权限
+            with self.db_manager.get_session() as session:
+                return self.auth_manager.has_permission(self.user_login_name, permission, session)
         except Exception as e:
             logger.error(f"检查权限失败: {str(e)}")
             return False
 
-    def _get_page_title(self, page_name: str) -> str:
-        """获取页面标题"""
-        # 创建标签页
-        tab_widget = QTabWidget()
-        tab_widget.addTab(HomePage(self.db_manager), "首页")
-        tab_widget.addTab(StatsPage(self.db_manager), "统计")
-        tab_widget.addTab(SettingsPage(self.db_manager), "设置")
-        return tab_widget.tabText(tab_widget.currentIndex())
-
-    def _refresh_user(self):
-        """刷新用户对象，确保与会话绑定"""
-        try:
-            if self.db_session and self.user:
-                self.user = self.db_session.merge(self.user)
-                self.db_session.refresh(self.user)
-        except Exception as e:
-            logger.error(f"刷新用户对象失败: {str(e)}")
-
     def closeEvent(self, event):
         """窗口关闭时的处理"""
-        try:
-            if self.db_session:
-                self.db_session.close()
-        except Exception as e:
-            logger.error(f"关闭数据库会话时发生错误: {str(e)}")
+        # 清理资源，但不再需要关闭会话
         super().closeEvent(event)
 
     def relogin(self):
-        """重新登录
-        关闭当前窗口，打开登录窗口
-        """
+        """重新登录，关闭当前窗口，打开登录窗口"""
         try:
-            # 关闭会话
-            if self.db_session:
-                self.db_session.close()
-                
+            # 清除认证状态
+            self.auth_manager.clear_current_user()
+            
             # 导入QApplication来获取应用实例
             from PySide6.QtWidgets import QApplication
             app = QApplication.instance()
@@ -379,3 +277,47 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"重新登录失败: {str(e)}")
             QMessageBox.critical(self, "错误", f"重新登录失败: {str(e)}")
+
+    def update_ui(self):
+        """更新UI，使用存储的用户属性"""
+        # 设置窗口标题
+        self.setWindowTitle(f"企业微信直播签到系统 | 用户: {self.user_name}")
+        
+        # 获取角色名称
+        role_names = {
+            "ROOT_ADMIN": "超级管理员",
+            "WECOM_ADMIN": "企业管理员",
+            "NORMAL": "普通用户"
+        }
+        role_name = role_names.get(self.user_role, "未知角色")
+        
+        # 更新状态栏信息
+        self.corp_label.setText(f"企业: {self.corp_name}")
+        self.user_label.setText(f"用户: {self.user_name} ({role_name})")
+
+    def show_settings(self):
+        """显示系统设置页面"""
+        # 调用home_page上的show_settings方法
+        if hasattr(self.home_page, 'show_settings'):
+            self.home_page.show_settings()
+        else:
+            logger.error("Home page没有show_settings方法")
+            QMessageBox.warning(self, "警告", "系统设置功能不可用")
+    
+    def show_performance_monitor(self):
+        """显示性能监控页面"""
+        # 调用home_page上的show_performance_monitor方法
+        if hasattr(self.home_page, 'show_performance_monitor'):
+            self.home_page.show_performance_monitor()
+        else:
+            logger.error("Home page没有show_performance_monitor方法")
+            QMessageBox.warning(self, "警告", "性能监控功能不可用")
+    
+    def show_stats_page(self):
+        """显示数据统计页面"""
+        # 调用home_page上的show_stats_page方法
+        if hasattr(self.home_page, 'show_stats_page'):
+            self.home_page.show_stats_page()
+        else:
+            logger.error("Home page没有show_stats_page方法")
+            QMessageBox.warning(self, "警告", "数据统计功能不可用")

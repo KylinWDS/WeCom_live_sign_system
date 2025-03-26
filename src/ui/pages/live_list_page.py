@@ -16,8 +16,8 @@ from src.utils.error_handler import ErrorHandler
 from src.models.live_booking import LiveBooking
 from src.core.database import DatabaseManager
 from src.api.wecom import WeComAPI
-from src.models.live import Live
-from datetime import datetime
+from src.models.living import Living, LivingStatus
+from datetime import datetime, timedelta
 from src.ui.components.dialogs.io_dialog import IODialog
 import pandas as pd
 import os
@@ -143,19 +143,19 @@ class LiveListPage(QWidget):
         try:
             # 获取直播列表
             with self.db_manager.get_session() as session:
-                query = session.query(Live)
+                query = session.query(Living)
                 
                 # 应用搜索条件
                 if self.live_title.text():
-                    query = query.filter(Live.title.like(f"%{self.live_title.text()}%"))
+                    query = query.filter(Living.theme.like(f"%{self.live_title.text()}%"))
                     
                 if self.live_status.currentText() != "全部":
                     status_map = {
-                        "未开始": 0,
-                        "进行中": 1,
-                        "已结束": 2
+                        "未开始": LivingStatus.RESERVED,
+                        "进行中": LivingStatus.LIVING,
+                        "已结束": LivingStatus.ENDED
                     }
-                    query = query.filter_by(status=status_map[self.live_status.currentText()])
+                    query = query.filter(Living.status == status_map[self.live_status.currentText()])
                     
                 # 计算总页数
                 total = query.count()
@@ -167,24 +167,21 @@ class LiveListPage(QWidget):
             # 更新表格
             self.table.setRowCount(len(records))
             for row, record in enumerate(records):
-                self.table.setItem(row, 0, QTableWidgetItem(record.live_session))
-                self.table.setItem(row, 1, QTableWidgetItem(record.title))
-                self.table.setItem(row, 2, QTableWidgetItem(record.start_time.strftime("%Y-%m-%d %H:%M:%S")))
+                self.table.setItem(row, 0, QTableWidgetItem(record.livingid))
+                self.table.setItem(row, 1, QTableWidgetItem(record.theme))
+                self.table.setItem(row, 2, QTableWidgetItem(record.living_start.strftime("%Y-%m-%d %H:%M:%S")))
                 self.table.setItem(row, 3, QTableWidgetItem(record.status))
-                self.table.setItem(row, 1, QTableWidgetItem(record.start_time.strftime("%Y-%m-%d %H:%M:%S")))
-                self.table.setItem(row, 2, QTableWidgetItem(record.end_time.strftime("%Y-%m-%d %H:%M:%S")))
-                self.table.setItem(row, 3, QTableWidgetItem(record.anchor))
                 self.table.setItem(row, 4, QTableWidgetItem(str(record.viewer_num)))
                 self.table.setItem(row, 5, QTableWidgetItem(str(record.comment_num)))
                 self.table.setItem(row, 6, QTableWidgetItem(str(record.mic_num)))
                 
                 # 状态
                 status_text = {
-                    0: "预约中",
-                    1: "直播中",
-                    2: "已结束",
-                    3: "已过期",
-                    4: "已取消"
+                    LivingStatus.RESERVED: "预约中",
+                    LivingStatus.LIVING: "直播中",
+                    LivingStatus.ENDED: "已结束",
+                    LivingStatus.EXPIRED: "已过期",
+                    LivingStatus.CANCELLED: "已取消"
                 }.get(record.status, "未知")
                 self.table.setItem(row, 7, QTableWidgetItem(status_text))
                 
@@ -236,7 +233,7 @@ class LiveListPage(QWidget):
             self.load_data()
             
     @PerformanceManager.measure_operation("view_details")
-    def view_details(self, live: Live):
+    def view_details(self, live: Living):
         """查看直播详情
         
         Args:
@@ -246,7 +243,7 @@ class LiveListPage(QWidget):
             # 获取直播详情
             response = self.network_manager.get(
                 "https://qyapi.weixin.qq.com/cgi-bin/living/get_living_info",
-                params={"livingid": live.live_session}
+                params={"livingid": live.livingid}
             )
             
             if response.get("errcode") == 0:
@@ -274,7 +271,7 @@ class LiveListPage(QWidget):
             ErrorHandler.handle_error(e, self, "查看直播详情失败")
             
     @PerformanceManager.measure_operation("import_sign")
-    def import_sign(self, live: Live):
+    def import_sign(self, live: Living):
         """导入签到信息
         
         Args:
@@ -304,7 +301,7 @@ class LiveListPage(QWidget):
             with self.db_manager.get_session() as session:
                 for _, row in df.iterrows():
                     sign = SignRecord(
-                        live_session=live.live_session,
+                        living_id=live.livingid,
                         user_id=row["用户ID"],
                         username=row["用户名"],
                         sign_time=pd.to_datetime(row["签到时间"])
@@ -318,7 +315,7 @@ class LiveListPage(QWidget):
             ErrorHandler.handle_error(e, self, "导入签到信息失败")
             
     @PerformanceManager.measure_operation("cancel_live")
-    def cancel_live(self, live: Live):
+    def cancel_live(self, live: Living):
         """取消直播
         
         Args:
@@ -336,13 +333,13 @@ class LiveListPage(QWidget):
             # 取消直播
             response = self.network_manager.post(
                 "https://qyapi.weixin.qq.com/cgi-bin/living/cancel",
-                json={"livingid": live.live_session}
+                json={"livingid": live.livingid}
             )
             
             if response.get("errcode") == 0:
                 # 更新直播状态
                 with self.db_manager.get_session() as session:
-                    live.status = 4  # 已取消
+                    live.status = LivingStatus.CANCELLED
                     session.commit()
                     
                 ErrorHandler.handle_info("取消直播成功", self, "成功")
@@ -374,25 +371,30 @@ class LiveListPage(QWidget):
                 
             # 获取所有直播记录
             with self.db_manager.get_session() as session:
-                records = session.query(Live).all()
+                records = session.query(Living).all()
                 
             # 创建DataFrame
             data = []
             for record in records:
+                # 计算结束时间
+                end_time = ""
+                if record.living_start and record.living_duration:
+                    end_time = (record.living_start + timedelta(seconds=record.living_duration)).strftime("%Y-%m-%d %H:%M:%S")
+                
                 data.append({
-                    "直播场次": record.live_session,
-                    "开始时间": record.start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "结束时间": record.end_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "主播": record.anchor,
+                    "直播场次": record.livingid,
+                    "开始时间": record.living_start.strftime("%Y-%m-%d %H:%M:%S") if record.living_start else "",
+                    "结束时间": end_time,
+                    "主播": record.anchor_userid,
                     "观看人数": record.viewer_num,
                     "评论数": record.comment_num,
                     "连麦人数": record.mic_num,
                     "状态": {
-                        0: "预约中",
-                        1: "直播中",
-                        2: "已结束",
-                        3: "已过期",
-                        4: "已取消"
+                        LivingStatus.RESERVED: "预约中",
+                        LivingStatus.LIVING: "直播中",
+                        LivingStatus.ENDED: "已结束",
+                        LivingStatus.EXPIRED: "已过期",
+                        LivingStatus.CANCELLED: "已取消"
                     }.get(record.status, "未知")
                 })
             df = pd.DataFrame(data)
@@ -453,11 +455,11 @@ class LiveDetailDialog(QDialog):
         layout.addRow("评论数:", QLabel(str(self.live_info["comment_num"])))
         layout.addRow("连麦人数:", QLabel(str(self.live_info["mic_num"])))
         layout.addRow("状态:", QLabel({
-            0: "预约中",
-            1: "直播中",
-            2: "已结束",
-            3: "已过期",
-            4: "已取消"
+            LivingStatus.RESERVED: "预约中",
+            LivingStatus.LIVING: "直播中",
+            LivingStatus.ENDED: "已结束",
+            LivingStatus.EXPIRED: "已过期",
+            LivingStatus.CANCELLED: "已取消"
         }.get(self.live_info["status"], "未知")))
         
         # 添加关闭按钮
