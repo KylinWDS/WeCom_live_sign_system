@@ -49,6 +49,7 @@ class LiveViewer(BaseModel):
     # 邀请关系
     invitor_userid = Column(String(50), nullable=True, comment="邀请人ID")
     invitor_name = Column(String(50), nullable=True, comment="邀请人名称")
+    is_invited_by_anchor = Column(Boolean, default=False, comment="是否为主播邀请")
     
     # 设备和IP信息
     ip = Column(String(50), nullable=True, comment="用户IP")
@@ -125,43 +126,76 @@ class LiveViewer(BaseModel):
         return cls(**data)
     
     @classmethod
-    def from_api_data(cls, living_id: int, user_data: Dict[str, Any], source: UserSource) -> 'LiveViewer':
-        """从API数据创建实例
+    def from_api_data(cls, user_data, living_id=None, user_type=None):
+        """从API数据创建LiveViewer实例
         
         Args:
+            user_data: 从API获取的用户数据
             living_id: 直播ID
-            user_data: 用户数据
-            source: 用户来源
+            user_type: 用户类型，1=内部用户，2=外部用户
             
         Returns:
-            LiveViewer: 新创建的实例
+            LiveViewer实例
         """
-        # 根据不同的用户来源处理不同的字段
-        if source == UserSource.INTERNAL:
-            # 内部成员
-            return cls(
+        try:
+            # 根据用户类型决定获取哪个字段作为用户ID
+            user_type = user_data.get("type", 1) if user_type is None else user_type
+            
+            # 尝试获取用户ID - 处理不同可能的字段名
+            userid = None
+            if user_type == 1:  # 内部用户
+                userid = user_data.get("userid") or user_data.get("user_id", "")
+            else:  # 外部用户
+                userid = (user_data.get("external_userid") or 
+                         user_data.get("external_user_id") or
+                         user_data.get("userid", ""))
+            
+            if not userid:
+                # 如果找不到有效的用户ID，记录日志并使用空字符串
+                import logging
+                logging.getLogger(__name__).warning(f"无法获取用户ID, 数据: {user_data}")
+                userid = ""
+            
+            # 从API数据创建LiveViewer实例
+            viewer = cls(
                 living_id=living_id,
-                userid=user_data.get("userid", ""),
+                userid=userid,
                 name=user_data.get("name", ""),
-                user_source=source,
-                user_type=2,  # 企业微信用户
-                department=user_data.get("department_name", ""),
+                user_source=UserSource.INTERNAL if user_type == 1 else UserSource.EXTERNAL,
+                user_type=user_type,
+                department=user_data.get("department", ""),
                 department_id=str(user_data.get("department_id", "")),
                 watch_time=user_data.get("watch_time", 0),
-                is_comment=1 if user_data.get("is_comment") else 0,
-                is_mic=1 if user_data.get("is_mic") else 0
+                is_comment=bool(user_data.get("is_comment", 0)),
+                is_mic=bool(user_data.get("is_mic", 0))
             )
-        else:
-            # 外部联系人
+            
+            # 处理邀请人信息 - 尝试不同可能的字段名
+            invitor_userid = None
+            if user_type == 1:  # 内部用户
+                invitor_userid = (user_data.get("invitor_userid") or 
+                                 user_data.get("invitor_user_id", ""))
+            else:  # 外部用户
+                invitor_userid = (user_data.get("invitor_external_userid") or 
+                                 user_data.get("invitor_userid") or 
+                                 user_data.get("invitor_user_id", ""))
+            
+            if invitor_userid:
+                viewer.invitor_userid = invitor_userid
+                viewer.invitor_name = user_data.get("invitor_name", "")
+            
+            return viewer
+        except Exception as e:
+            # 记录错误但不中断处理
+            import logging
+            logging.getLogger(__name__).error(f"从API数据创建LiveViewer失败: {str(e)}, 数据: {user_data}")
+            # 返回一个最小化的有效记录
             return cls(
                 living_id=living_id,
-                userid=user_data.get("userid", ""),
-                name=user_data.get("name", ""),
-                user_source=source,
-                user_type=1,  # 微信用户
-                watch_time=user_data.get("watch_time", 0),
-                is_comment=1 if user_data.get("is_comment") else 0,
-                is_mic=1 if user_data.get("is_mic") else 0
+                userid=str(user_data.get("userid", "")),
+                name=str(user_data.get("name", "")),
+                user_source=UserSource.INTERNAL if user_type == 1 else UserSource.EXTERNAL,
+                user_type=user_type or 1
             )
     
     def update_watch_stats(self, watch_time: int, is_comment: int = None, is_mic: int = None) -> None:

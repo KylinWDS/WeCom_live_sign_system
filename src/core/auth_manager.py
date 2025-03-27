@@ -1086,9 +1086,23 @@ class AuthManager:
             logger.error(f"设置当前用户失败: {str(e)}")
             return False
     
-    def clear_current_user(self):
-        """清除当前线程的用户"""
-        if hasattr(self._thread_local, 'user'):
-            delattr(self._thread_local, 'user')
-        if hasattr(self._thread_local, 'user_id'):
-            delattr(self._thread_local, 'user_id') 
+    def get_current_user_id(self) -> Optional[int]:
+        """获取当前线程的用户ID
+        
+        Returns:
+            Optional[int]: 用户ID或None
+        """
+        try:
+            # 如果存储了用户ID，直接返回
+            if hasattr(self._thread_local, 'user_id') and self._thread_local.user_id is not None:
+                return self._thread_local.user_id
+                
+            # 如果存储了完整用户对象，返回其ID
+            elif hasattr(self._thread_local, 'user') and self._thread_local.user is not None:
+                return self._thread_local.user.userid
+                
+            else:
+                return None
+        except Exception as e:
+            logger.error(f"获取当前用户ID失败: {str(e)}")
+            return None 

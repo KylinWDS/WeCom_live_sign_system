@@ -3,7 +3,8 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QTableWidget, QTableWidgetItem,
     QMessageBox, QComboBox, QSpinBox, QHeaderView,
     QFileDialog, QDialog, QFormLayout, QGroupBox,
-    QDateEdit, QTimeEdit, QToolBar, QSpacerItem, QSizePolicy
+    QDateEdit, QTimeEdit, QToolBar, QSpacerItem, QSizePolicy,
+    QProgressDialog, QInputDialog
 )
 from PySide6.QtCore import Qt, QDateTime, QTimer
 from PySide6.QtGui import QIcon
@@ -24,6 +25,7 @@ import pandas as pd
 import os
 from typing import List, Optional, Dict, Any
 from sqlalchemy import select, func
+from src.core.live_viewer_manager import LiveViewerManager
 
 logger = get_logger(__name__)
 
@@ -117,7 +119,7 @@ class LiveListPage(QWidget):
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         
         # 设置各列的宽度模式 - 除了操作列使用固定宽度外，其他列使用固定宽度以确保内容可见
-        column_widths = [100, 200, 150, 150, 150, 100, 120, 80, 80, 80, 80, 80, 80, 80, 80, 280]  # 设置每列宽度，添加签到次数列
+        column_widths = [100, 200, 150, 150, 150, 100, 120, 80, 80, 80, 80, 80, 80, 80, 80, 350]  # 将操作列宽度从280增加到350
         
         for i in range(15):  # 前15列使用固定宽度
             self.table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Interactive)  # 允许用户调整宽度
@@ -568,6 +570,17 @@ class LiveListPage(QWidget):
                 view_btn.clicked.connect(lambda checked, r=living: self.view_details(r))
                 btn_layout.addWidget(view_btn)
                 
+                # 添加"拉取观看信息"按钮，并根据状态调整显示
+                fetch_viewer_btn = QPushButton("拉取观看信息" if not record_data["is_viewer_fetched"] else "重取观看信息")
+                fetch_viewer_btn.setObjectName("linkButton")
+                fetch_viewer_btn.setMinimumHeight(22)  # 减小按钮高度
+                fetch_viewer_btn.setFixedWidth(120)  # 固定宽度
+                # 如果已经拉取过，使用不同的样式
+                if record_data["is_viewer_fetched"]:
+                    fetch_viewer_btn.setStyleSheet("color: #0056b3;")  # 使用较暗的蓝色
+                fetch_viewer_btn.clicked.connect(lambda checked, r=living: self.fetch_watch_stat(r))
+                btn_layout.addWidget(fetch_viewer_btn)
+                
                 import_btn = QPushButton("导入签到")
                 import_btn.setObjectName("linkButton")
                 import_btn.setMinimumHeight(22)  # 减小按钮高度
@@ -758,6 +771,7 @@ class LiveListPage(QWidget):
                 booking_records = session.query(LiveBooking).all()
                 for booking in booking_records:
                     bookings[booking.livingid] = {
+                        "id": booking.id,  # 添加booking的ID
                         "livingid": booking.livingid,
                         "theme": booking.theme,
                         "living_start": booking.living_start,
@@ -781,6 +795,7 @@ class LiveListPage(QWidget):
                 living_records = session.query(Living).all()
                 for living in living_records:
                     livings[living.livingid] = {
+                        "id": living.id,  # 添加living的ID
                         "livingid": living.livingid,
                         "theme": living.theme,
                         "living_start": living.living_start,
@@ -819,8 +834,10 @@ class LiveListPage(QWidget):
                             final_data = {}
                             
                             # 添加bookings数据
+                            booking_id = None
                             if livingid in bookings:
                                 final_data.update(bookings[livingid])
+                                booking_id = bookings[livingid]["id"]
                                 
                             # 添加livings数据
                             if livingid in livings:
@@ -895,7 +912,15 @@ class LiveListPage(QWidget):
                                 exists.subscribe_count = final_data.get("subscribe_count", exists.subscribe_count)
                                 # 设置远程同步状态为已同步
                                 exists.is_remote_synced = 1
+                                # 设置关联的预约ID
+                                exists.live_booking_id = booking_id
                                 updated_count += 1
+                                
+                                # 更新相关的LiveViewer记录的live_booking_id
+                                if booking_id:
+                                    session.query(LiveViewer).filter_by(living_id=exists.id).update(
+                                        {"live_booking_id": booking_id}
+                                    )
                             else:
                                 # 创建新记录
                                 # 处理类型字段，确保它是 LivingType 枚举类型
@@ -945,7 +970,8 @@ class LiveListPage(QWidget):
                                     mic_num=final_data.get("mic_num", 0),
                                     online_count=final_data.get("online_count", 0),
                                     subscribe_count=final_data.get("subscribe_count", 0),
-                                    is_remote_synced=1  # 设置远程同步状态为已同步
+                                    is_remote_synced=1,  # 设置远程同步状态为已同步
+                                    live_booking_id=booking_id  # 设置关联的预约ID
                                 )
                                 session.add(new_living)
                                 created_count += 1
@@ -1058,6 +1084,96 @@ class LiveListPage(QWidget):
             
         except Exception as e:
             ErrorHandler.handle_error(e, self, "导入签到失败")
+            
+    @PerformanceManager.measure_operation("fetch_watch_stat")
+    def fetch_watch_stat(self, live: Living):
+        """拉取直播观看信息"""
+        logger.info("开始拉取直播观看信息")
+        
+        try:
+            # 显示确认对话框
+            confirm_box = QMessageBox(self)
+            confirm_box.setIcon(QMessageBox.Icon.Question)
+            confirm_box.setWindowTitle("确认拉取")
+            confirm_box.setText(f"确定要拉取直播[{live.theme}]的观看信息吗？")
+            confirm_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            confirm_box.setDefaultButton(QMessageBox.StandardButton.No)
+            
+            if confirm_box.exec() != QMessageBox.StandardButton.Yes:
+                return
+            
+            # 显示进度对话框
+            dialog = IODialog(parent=self, title="拉取观看信息", is_import=False, is_progress_dialog=True)
+            dialog.show()
+            dialog.add_info(f"正在拉取直播[{live.theme}]的观看信息...")
+            
+            # 创建LiveViewerManager实例
+            from src.core.live_viewer_manager import LiveViewerManager
+            viewer_manager = LiveViewerManager(
+                self.db_manager,
+                self.auth_manager
+            )
+            
+            # 拉取观看信息 - 移除外部token参数，使用系统自动处理token
+            success = viewer_manager.process_viewer_info(live.livingid)
+            
+            # 获取统计数据
+            stats = viewer_manager.get_stats()
+            
+            # 检查是否成功拉取数据
+            if not success:
+                # 显示错误信息
+                error_message = stats.get('last_error', '未知错误')
+                dialog.add_error(f"观看数据拉取失败：{error_message}")
+                dialog.finish()
+                return
+            
+            # 检查是否有观众数据
+            if stats.get('total_viewers', 0) == 0:
+                dialog.add_warning("未获取到任何观看数据，请确认该直播有人观看")
+                dialog.finish()
+                
+                # 尽管没有观众数据，仍然更新直播的拉取状态
+                with self.db_manager.get_session() as session:
+                    living_record = session.query(Living).filter_by(livingid=live.livingid).first()
+                    if living_record:
+                        living_record.is_viewer_fetched = 1
+                        session.commit()
+                        
+                # 重新加载直播列表
+                self.load_data()
+                return
+            
+            # 显示成功信息
+            dialog.add_success(f"观看数据拉取成功！")
+            dialog.add_info(f"总观看人数: {stats.get('total_viewers', 0)}")
+            dialog.add_info(f"内部成员: {stats.get('internal_viewers', 0)}")
+            dialog.add_info(f"外部用户: {stats.get('external_viewers', 0)}")
+                
+            # 更新直播的拉取状态
+            with self.db_manager.get_session() as session:
+                living_record = session.query(Living).filter_by(livingid=live.livingid).first()
+                if living_record:
+                    living_record.is_viewer_fetched = 1
+                    session.commit()
+                    dialog.add_success("已更新拉取状态标记")
+            
+            # 重新加载直播列表
+            self.load_data()
+            
+            # 完成操作
+            dialog.finish()
+            
+            # 显示成功消息
+            msg_box = AutoCloseMessageBox(
+                "拉取成功", 
+                f"已成功拉取直播[{live.theme}]的观看信息", 
+                timeout=3000
+            )
+            msg_box.exec()
+                
+        except Exception as e:
+            ErrorHandler.handle_error(e, self, "拉取观看信息失败")
             
     @PerformanceManager.measure_operation("export_data")
     def export_data(self):

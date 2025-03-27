@@ -49,6 +49,10 @@ class Living(BaseModel):
     is_doc_uploaded = Column(Integer, default=0, comment="是否已上传企微文档(0-否,1-是)")
     is_remote_synced = Column(Integer, default=0, comment="是否已远程同步(0-否,1-是)")
     
+    # 关联到LiveBooking
+    live_booking_id = Column(Integer, ForeignKey('live_bookings.id'), nullable=True)
+    live_booking = relationship('LiveBooking', backref='livings')
+    
     # 关联到LiveViewer
     viewers = relationship("LiveViewer", back_populates="living", cascade="all, delete-orphan")
 

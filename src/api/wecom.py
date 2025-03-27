@@ -6,6 +6,7 @@ from ..utils.error_handler import ErrorHandler
 from ..utils.performance_manager import PerformanceManager
 import time
 from datetime import datetime
+import os
 
 logger = get_logger(__name__)
 
@@ -247,17 +248,111 @@ class WeComAPI:
             self.error_handler.handle_error(e, "获取用户直播列表")
             raise
     
-    def get_watch_stat(self, livingid: str, next_key: str = "") -> Dict[str, Any]:
-        """获取直播观看明细"""
+    def get_watch_stat(self, livingid: str, next_key: str = '', data_type: int = 1, token: str = None) -> dict:
+        """获取观看直播回放的详细信息
+        
+        参数:
+            livingid: 直播ID
+            next_key: 用于分页查询的key，首次请求可不填
+            data_type: 数据类型，1表示观看直播数据，2表示观看回放数据
+            token: 可选的访问令牌，如果提供则优先使用
+            
+        返回:
+            dict: API响应
+        """
         try:
-            data = {
+            # 优先使用传入的token，其次使用token管理器的token
+            access_token = token if token else self.token_manager.get_token()
+            url = f"{self.BASE_URL}/living/get_watch_stat?access_token={access_token}"
+            
+            payload = {
                 "livingid": livingid,
-                "next_key": next_key
+                "next_key": next_key,
+                "data_type": data_type
             }
-            return self._make_request("POST", "living/get_watch_stat", data=data)
+            
+            logger.debug(f"发送API请求: {url} 参数: {payload}")
+            response = requests.post(url, json=payload)
+            result = response.json()
+            
+            if result.get("errcode") != 0:
+                # 如果token过期，尝试刷新后重试
+                if result.get("errcode") == 42001:
+                    logger.warning("Token已过期，尝试刷新并重试...")
+                    self.token_manager.refresh_token()
+                    return self.get_watch_stat(livingid, next_key, data_type)
+                
+                logger.error(f"获取直播观看数据失败: {result}")
+                return {"error": result.get("errmsg", "未知错误")}
+            
+            # 检查并标准化API返回结构
+            if "stat_info" in result:
+                # 处理返回数据，确保字段一致性
+                stat_info = result.get("stat_info", {})
+                
+                # 确保有内部用户字段
+                if "users" in stat_info and "user_list" not in stat_info:
+                    stat_info["user_list"] = stat_info["users"]
+                    
+                # 确保有外部用户字段
+                if "external_users" in stat_info and "external_user_list" not in stat_info:
+                    stat_info["external_user_list"] = stat_info["external_users"]
+                    
+                # 更新结果
+                result["stat_info"] = stat_info
+            
+            # 记录返回数据大小和结构信息
+            external_users_count = len(result.get("stat_info", {}).get("external_users", []))
+            internal_users_count = len(result.get("stat_info", {}).get("users", []))
+            
+            logger.info(f"获取到直播[{livingid}]观看数据: "
+                      f"内部用户 {internal_users_count} 条, "
+                      f"外部用户 {external_users_count} 条")
+            
+            return result
+            
         except Exception as e:
-            self.error_handler.handle_error(e, "获取直播观看明细")
-            raise
+            logger.error(f"获取直播观看数据异常: {str(e)}")
+            return {"error": str(e)}
+            
+    def fetch_watch_stat_batch(self, livingid: str, next_key: str = None, data_type: int = 1, token: str = None):
+        """批量获取直播观看数据（优化版）
+        
+        直接返回API原始响应，供多线程处理使用
+        
+        Args:
+            livingid: 直播ID
+            next_key: 下一页的key，首次请求可不填
+            data_type: 数据类型，1表示观看直播数据，2表示观看回放数据
+            token: 可选的访问令牌，如果提供则优先使用
+            
+        Returns:
+            dict: API原始响应
+        """
+        try:
+            logger.info(f"获取直播[{livingid}]观看数据，next_key=[{next_key}]")
+            
+            # 调用API获取数据
+            response = self.get_watch_stat(livingid, next_key, data_type, token)
+            
+            # 记录API返回的原始数据结构，帮助诊断
+            if not next_key:  # 只在第一页记录
+                logger.info(f"API返回的数据结构: {list(response.keys())}")
+            
+            # 检查是否成功
+            if "error" in response or response.get("errcode", 0) != 0:
+                error_msg = response.get("error") or response.get("errmsg", "未知错误")
+                logger.error(f"批量获取直播观看数据出错: {error_msg}")
+                return {"error": error_msg, "errcode": response.get("errcode", -1)}
+            
+            # 直接返回原始响应
+            return response
+            
+        except Exception as e:
+            logger.error(f"批量获取直播观看数据异常: {str(e)}")
+            import traceback
+            logger.error(f"错误详情: {traceback.format_exc()}")
+            return {"error": str(e), "errcode": -1}
     
     def cancel_living(self, livingid: str) -> Dict[str, Any]:
         """取消预约直播"""
@@ -309,5 +404,37 @@ class WeComAPI:
             else:
                 # 记录一般错误
                 self.error_handler.handle_error(e, "测试企业微信接口连接")
+            raise
+    
+    def get_user_info(self, userid: str) -> Dict[str, Any]:
+        """获取用户信息
+        
+        Args:
+            userid: 用户ID
+            
+        Returns:
+            Dict[str, Any]: 用户信息
+        """
+        try:
+            params = {"userid": userid}
+            return self._make_request("GET", "user/get", params=params)
+        except Exception as e:
+            self.error_handler.handle_error(e, "获取用户信息")
+            raise
+            
+    def get_external_contact(self, external_userid: str) -> Dict[str, Any]:
+        """获取外部联系人信息
+        
+        Args:
+            external_userid: 外部联系人ID
+            
+        Returns:
+            Dict[str, Any]: 外部联系人信息
+        """
+        try:
+            params = {"external_userid": external_userid}
+            return self._make_request("GET", "externalcontact/get", params=params)
+        except Exception as e:
+            self.error_handler.handle_error(e, "获取外部联系人信息")
             raise
     

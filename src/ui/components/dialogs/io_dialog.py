@@ -1,5 +1,5 @@
 # PySide6导入
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFileDialog, QLineEdit, QComboBox, QCheckBox
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFileDialog, QLineEdit, QComboBox, QCheckBox, QTextEdit, QProgressBar
 from PySide6.QtCore import Qt
 from typing import Dict, Any, List
 
@@ -19,10 +19,19 @@ logger = get_logger(__name__)
 class IODialog(BaseDialog):
     """导入/导出对话框基类"""
     
-    def __init__(self, parent=None, title: str = "", is_import: bool = True):
+    def __init__(self, parent=None, title: str = "", is_import: bool = True, is_progress_dialog: bool = False):
         super().__init__(parent, title, 500, 400)
         self.is_import = is_import
+        self.is_progress_dialog = is_progress_dialog
         
+        # 如果是进度对话框，创建不同的布局
+        if is_progress_dialog:
+            self._init_progress_dialog()
+        else:
+            self._init_io_dialog()
+            
+    def _init_io_dialog(self):
+        """初始化导入/导出对话框"""
         # 创建文件选择区域
         self.file_layout = QHBoxLayout()
         self.file_label = QLabel("文件路径:")
@@ -49,12 +58,31 @@ class IODialog(BaseDialog):
         self.encoding_check.setChecked(True)
         self.options_layout.addWidget(self.encoding_check)
         
-        if not is_import:
+        if not self.is_import:
             self.header_check = QCheckBox("包含表头")
             self.header_check.setChecked(True)
             self.options_layout.addWidget(self.header_check)
             
         self.content_layout.addLayout(self.options_layout)
+        
+    def _init_progress_dialog(self):
+        """初始化进度对话框"""
+        # 创建日志显示区域
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.content_layout.addWidget(self.log_text)
+        
+        # 创建进度条
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setValue(0)
+        self.content_layout.addWidget(self.progress_bar)
+        
+        # 设置按钮
+        self.set_ok_button_text("完成")
+        self.set_ok_button_enabled(False)
+        self.set_cancel_button_text("取消")
         
     def _browse_file(self):
         """浏览文件"""
@@ -87,8 +115,50 @@ class IODialog(BaseDialog):
     def get_options(self) -> Dict[str, Any]:
         """获取选项"""
         options = {
-            "encoding": "utf-8" if self.encoding_check.isChecked() else "gbk"
+            "encoding": "utf-8" if hasattr(self, 'encoding_check') and self.encoding_check.isChecked() else "gbk"
         }
-        if not self.is_import:
+        if not self.is_import and hasattr(self, 'header_check'):
             options["include_header"] = self.header_check.isChecked()
         return options
+        
+    # 以下是进度对话框特有的方法
+    def add_info(self, text: str):
+        """添加信息日志"""
+        if hasattr(self, 'log_text'):
+            self.log_text.append(f"<font color='black'>[信息] {text}</font>")
+            self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
+            
+    def add_success(self, text: str):
+        """添加成功日志"""
+        if hasattr(self, 'log_text'):
+            self.log_text.append(f"<font color='green'>[成功] {text}</font>")
+            self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
+            
+    def add_warning(self, text: str):
+        """添加警告日志"""
+        if hasattr(self, 'log_text'):
+            self.log_text.append(f"<font color='orange'>[警告] {text}</font>")
+            self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
+            
+    def add_error(self, text: str):
+        """添加错误日志"""
+        if hasattr(self, 'log_text'):
+            self.log_text.append(f"<font color='red'>[错误] {text}</font>")
+            self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
+            
+    def set_progress(self, value: int):
+        """设置进度条值"""
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.setValue(value)
+            
+    def clear_log(self):
+        """清除日志"""
+        if hasattr(self, 'log_text'):
+            self.log_text.clear()
+            
+    def finish(self):
+        """完成操作"""
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.setValue(100)
+            self.set_ok_button_enabled(True)
+            self.set_cancel_button_enabled(False)
