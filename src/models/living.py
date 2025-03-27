@@ -4,7 +4,6 @@ from .base import BaseModel
 import enum
 from datetime import datetime, timedelta
 from typing import Optional
-from .sign_record import SignRecord
 
 class LivingStatus(enum.Enum):
     """直播状态"""
@@ -44,9 +43,14 @@ class Living(BaseModel):
     online_count = Column(Integer, default=0, comment="当前在线人数")
     subscribe_count = Column(Integer, default=0, comment="预约人数")
     
-    # 关联
-    watch_stats = relationship("WatchStat", back_populates="living")
-    sign_records = relationship("SignRecord", back_populates="living")
+    # 状态标记
+    is_viewer_fetched = Column(Integer, default=0, comment="是否已拉取观看信息(0-否,1-是)")
+    is_sign_imported = Column(Integer, default=0, comment="是否已导入签到(0-否,1-是)")
+    is_doc_uploaded = Column(Integer, default=0, comment="是否已上传企微文档(0-否,1-是)")
+    is_remote_synced = Column(Integer, default=0, comment="是否已远程同步(0-否,1-是)")
+    
+    # 关联到LiveViewer
+    viewers = relationship("LiveViewer", back_populates="living", cascade="all, delete-orphan")
 
     def __init__(
         self,
@@ -64,7 +68,11 @@ class Living(BaseModel):
         comment_num: int = 0,
         mic_num: int = 0,
         online_count: int = 0,
-        subscribe_count: int = 0
+        subscribe_count: int = 0,
+        is_viewer_fetched: int = 0,
+        is_sign_imported: int = 0,
+        is_doc_uploaded: int = 0,
+        is_remote_synced: int = 0
     ):
         self.livingid = livingid
         self.theme = theme
@@ -81,6 +89,10 @@ class Living(BaseModel):
         self.mic_num = mic_num
         self.online_count = online_count
         self.subscribe_count = subscribe_count
+        self.is_viewer_fetched = is_viewer_fetched
+        self.is_sign_imported = is_sign_imported
+        self.is_doc_uploaded = is_doc_uploaded
+        self.is_remote_synced = is_remote_synced
     
     def is_active(self) -> bool:
         """检查直播是否正在进行中
@@ -128,25 +140,9 @@ class Living(BaseModel):
             "comment_num": self.comment_num,
             "mic_num": self.mic_num,
             "online_count": self.online_count,
-            "subscribe_count": self.subscribe_count
-        }
-
-class WatchStat(BaseModel):
-    """观看统计模型"""
-    __tablename__ = "watch_stats"
-    
-    living_id = Column(Integer, ForeignKey("livings.id"), nullable=False)
-    userid = Column(String(50), nullable=False, comment="用户ID")
-    name = Column(String(50), nullable=False, comment="用户名称")
-    watch_time = Column(Integer, default=0, comment="观看时长(秒)")
-    is_comment = Column(Integer, default=0, comment="是否评论")
-    is_mic = Column(Integer, default=0, comment="是否连麦")
-    invitor_userid = Column(String(50), nullable=True, comment="邀请人ID")
-    invitor_name = Column(String(50), nullable=True, comment="邀请人名称")
-    user_type = Column(Integer, default=1, comment="用户类型：1-微信用户，2-企业微信用户")
-    ip = Column(String(50), nullable=True, comment="用户IP")
-    location = Column(JSON, nullable=True, comment="用户地理位置")
-    device_info = Column(JSON, nullable=True, comment="设备信息")
-    
-    # 关联
-    living = relationship("Living", back_populates="watch_stats") 
+            "subscribe_count": self.subscribe_count,
+            "is_viewer_fetched": self.is_viewer_fetched,
+            "is_sign_imported": self.is_sign_imported,
+            "is_doc_uploaded": self.is_doc_uploaded,
+            "is_remote_synced": self.is_remote_synced
+        } 

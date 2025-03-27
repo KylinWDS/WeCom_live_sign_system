@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from src.utils.logger import get_logger
-from src.models.sign_record import SignRecord
+from src.models.live_viewer import LiveViewer
 from src.models.live_booking import LiveBooking
 from src.core.token_manager import TokenManager
 
@@ -51,27 +51,29 @@ class SignImportManager:
                 for _, row in df.iterrows():
                     try:
                         # 创建签到记录
-                        sign_record = SignRecord(
+                        live_viewer = LiveViewer(
                             living_id=living_id,
                             user_id=str(row["用户ID"]),
-                            user_name=str(row["用户名"]),
+                            username=str(row["用户名"]),
                             sign_time=row["签到时间"],
-                            status="已签到"
+                            is_signed=True,
+                            sign_count=1
                         )
                         
                         # 检查是否已存在
-                        existing = session.query(SignRecord).filter_by(
+                        existing = session.query(LiveViewer).filter_by(
                             living_id=living_id,
-                            user_id=sign_record.user_id
+                            user_id=live_viewer.user_id
                         ).first()
                         
                         if existing:
                             # 更新现有记录
-                            existing.sign_time = sign_record.sign_time
-                            existing.status = sign_record.status
+                            existing.sign_time = live_viewer.sign_time
+                            existing.is_signed = True
+                            existing.sign_count += 1
                         else:
                             # 添加新记录
-                            session.add(sign_record)
+                            session.add(live_viewer)
                             
                         success_count += 1
                         
@@ -180,7 +182,7 @@ class SignImportManager:
                                 user_id = self._get_user_id(user_name)
                                 
                                 # 检查是否已存在签到记录
-                                existing_record = session.query(SignRecord).filter_by(
+                                existing_record = session.query(LiveViewer).filter_by(
                                     living_id=living_id,
                                     user_id=user_id
                                 ).first()
@@ -191,17 +193,23 @@ class SignImportManager:
                                     existing_record.sign_time = sign_time
                                     existing_record.department = department
                                     existing_record.updated_at = datetime.now()
+                                    existing_record.is_signed = True
                                 else:
                                     # 创建新记录
-                                    sign_record = SignRecord(
+                                    live_viewer = LiveViewer(
                                         living_id=living_id,
                                         user_id=user_id,
-                                        user_name=user_name,
+                                        username=user_name,
                                         department=department,
+                                        is_signed=True,
                                         sign_time=sign_time,
-                                        sign_count=1
+                                        sign_count=1,
+                                        sign_type=1,
+                                        sign_status=1,
+                                        created_at=datetime.now(),
+                                        updated_at=datetime.now()
                                     )
-                                    session.add(sign_record)
+                                    session.add(live_viewer)
                                 
                                 success_count += 1
                                 

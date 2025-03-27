@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QDialog, QFormLayout, QGroupBox,
     QDateEdit, QTimeEdit, QToolBar, QSpacerItem, QSizePolicy
 )
-from PySide6.QtCore import Qt, QDateTime
+from PySide6.QtCore import Qt, QDateTime, QTimer
 from PySide6.QtGui import QIcon
 from ..managers.style import StyleManager
 from ..utils.widget_utils import WidgetUtils
@@ -26,6 +26,46 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy import select, func
 
 logger = get_logger(__name__)
+
+class AutoCloseMessageBox(QMessageBox):
+    """自动关闭的消息对话框"""
+    
+    def __init__(self, title, text, timeout=3000, parent=None):
+        """
+        初始化自动关闭的消息对话框
+        
+        Args:
+            title: 标题
+            text: 显示文本
+            timeout: 自动关闭的时间（毫秒）
+            parent: 父窗口
+        """
+        super().__init__(QMessageBox.Information, title, text, QMessageBox.NoButton, parent)
+        self.timeout = timeout
+        
+        # 添加倒计时标签
+        self.time_label = QLabel(f"{timeout//1000}秒后自动关闭", self)
+        self.time_label.setStyleSheet("color: gray; margin-top: 10px;")
+        self.time_label.setAlignment(Qt.AlignRight)
+        
+        # 获取布局并添加标签
+        layout = self.layout()
+        layout.addWidget(self.time_label, layout.rowCount(), 0, 1, layout.columnCount(), Qt.AlignRight)
+        
+        # 设置定时器
+        self.countdown = timeout // 1000  # 转换为秒
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_counter)
+        self.timer.start(1000)  # 每秒更新一次
+    
+    def update_counter(self):
+        """更新倒计时"""
+        self.countdown -= 1
+        if self.countdown <= 0:
+            self.timer.stop()
+            self.close()
+        else:
+            self.time_label.setText(f"{self.countdown}秒后自动关闭")
 
 class LiveListPage(QWidget):
     """直播列表页面"""
@@ -64,11 +104,12 @@ class LiveListPage(QWidget):
         
         # 创建表格
         self.table = QTableWidget()
-        self.table.setColumnCount(12)  # 增加到12列（添加签到次数列）
+        self.table.setColumnCount(16)  # 从12增加到16列，添加4个状态字段
         self.table.setHorizontalHeaderLabels([
             "直播ID", "直播标题", "开始时间", "结束时间",
             "主播", "状态", "直播类型", 
-            "观看人数", "评论数", "签到人数", "签到次数", "操作"  # 添加"签到次数"
+            "观看人数", "评论数", "签到人数", "签到次数", 
+            "观看信息", "签到导入", "企微文档", "远程同步", "操作"  # 添加4个状态字段
         ])
         
         # 设置表格可以显示滚动条
@@ -76,15 +117,15 @@ class LiveListPage(QWidget):
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         
         # 设置各列的宽度模式 - 除了操作列使用固定宽度外，其他列使用固定宽度以确保内容可见
-        column_widths = [100, 200, 150, 150, 150, 100, 120, 80, 80, 80, 80, 280]  # 设置每列宽度，添加签到次数列
+        column_widths = [100, 200, 150, 150, 150, 100, 120, 80, 80, 80, 80, 80, 80, 80, 80, 280]  # 设置每列宽度，添加签到次数列
         
-        for i in range(11):  # 前11列使用固定宽度
+        for i in range(15):  # 前15列使用固定宽度
             self.table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Interactive)  # 允许用户调整宽度
             self.table.setColumnWidth(i, column_widths[i])
             
         # 操作列使用固定宽度，确保按钮显示完整
-        self.table.horizontalHeader().setSectionResizeMode(11, QHeaderView.Fixed)
-        self.table.setColumnWidth(11, column_widths[11])  # 为操作列设置足够宽度
+        self.table.horizontalHeader().setSectionResizeMode(15, QHeaderView.Fixed)
+        self.table.setColumnWidth(15, column_widths[15])  # 为操作列设置足够宽度
         
         # 设置垂直头部策略，适应内容
         self.table.verticalHeader().setVisible(False)  # 隐藏行号
@@ -156,7 +197,46 @@ class LiveListPage(QWidget):
         # 添加弹性空间，让元素靠左对齐
         first_row.addStretch(1)
         
-        # 第二行：时间范围和按钮
+        # 第二行：新增的状态字段搜索
+        status_row = QHBoxLayout()
+        status_row.setSpacing(10)
+        
+        # 是否拉取观看信息
+        status_row.addWidget(QLabel("观看信息:"))
+        self.viewer_fetched_status = QComboBox()
+        self.viewer_fetched_status.addItems(["全部", "已拉取", "未拉取"])
+        self.viewer_fetched_status.setMaximumWidth(80)
+        WidgetUtils.set_combo_style(self.viewer_fetched_status)
+        status_row.addWidget(self.viewer_fetched_status)
+        
+        # 是否导入签到
+        status_row.addWidget(QLabel("签到导入:"))
+        self.sign_imported_status = QComboBox()
+        self.sign_imported_status.addItems(["全部", "已导入", "未导入"])
+        self.sign_imported_status.setMaximumWidth(80)
+        WidgetUtils.set_combo_style(self.sign_imported_status)
+        status_row.addWidget(self.sign_imported_status)
+        
+        # 是否上传企微文档
+        status_row.addWidget(QLabel("企微文档:"))
+        self.doc_uploaded_status = QComboBox()
+        self.doc_uploaded_status.addItems(["全部", "已上传", "未上传"])
+        self.doc_uploaded_status.setMaximumWidth(80)
+        WidgetUtils.set_combo_style(self.doc_uploaded_status)
+        status_row.addWidget(self.doc_uploaded_status)
+        
+        # 是否远程同步
+        status_row.addWidget(QLabel("远程同步:"))
+        self.remote_synced_status = QComboBox()
+        self.remote_synced_status.addItems(["全部", "已同步", "未同步"])
+        self.remote_synced_status.setMaximumWidth(80)
+        WidgetUtils.set_combo_style(self.remote_synced_status)
+        status_row.addWidget(self.remote_synced_status)
+        
+        # 添加弹性空间，让元素靠左对齐
+        status_row.addStretch(1)
+        
+        # 第三行：时间范围和按钮
         second_row = QHBoxLayout()
         second_row.setSpacing(10)
         
@@ -200,6 +280,7 @@ class LiveListPage(QWidget):
         
         # 将两行添加到主布局
         main_layout.addLayout(first_row)
+        main_layout.addLayout(status_row)
         main_layout.addLayout(second_row)
         
         return group
@@ -263,6 +344,27 @@ class LiveListPage(QWidget):
                     }
                     query = query.filter(Living.status == status_map[self.live_status.currentText()])
                 
+                # 应用新增的状态字段过滤条件
+                # 是否拉取观看信息
+                if self.viewer_fetched_status.currentText() != "全部":
+                    is_fetched = 1 if self.viewer_fetched_status.currentText() == "已拉取" else 0
+                    query = query.filter(Living.is_viewer_fetched == is_fetched)
+                
+                # 是否导入签到
+                if self.sign_imported_status.currentText() != "全部":
+                    is_imported = 1 if self.sign_imported_status.currentText() == "已导入" else 0
+                    query = query.filter(Living.is_sign_imported == is_imported)
+                
+                # 是否上传企微文档
+                if self.doc_uploaded_status.currentText() != "全部":
+                    is_uploaded = 1 if self.doc_uploaded_status.currentText() == "已上传" else 0
+                    query = query.filter(Living.is_doc_uploaded == is_uploaded)
+                
+                # 是否远程同步
+                if self.remote_synced_status.currentText() != "全部":
+                    is_synced = 1 if self.remote_synced_status.currentText() == "已同步" else 0
+                    query = query.filter(Living.is_remote_synced == is_synced)
+                
                 # 应用日期范围查询
                 start_datetime = self.start_date_time.dateTime().toPython()
                 end_datetime = self.end_date_time.dateTime().toPython()
@@ -319,11 +421,43 @@ class LiveListPage(QWidget):
                         record_data["end_time"] = None
                         
                     # 获取签到统计信息
-                    from src.models.sign_record import SignRecord
-                    sign_stats = SignRecord.get_sign_statistics(record.id)
+                    from src.models.live_viewer import LiveViewer
+                    # 使用 LiveViewer 查询签到统计
+                    sign_stats = {}
+                    with self.db_manager.get_session() as stats_session:
+                        # 获取不同的签到人数
+                        unique_signers = stats_session.query(func.count(LiveViewer.id)).filter(
+                            LiveViewer.living_id == record.id,
+                            LiveViewer.is_signed == True
+                        ).scalar() or 0
+                        
+                        # 获取总签到次数
+                        sign_count = stats_session.query(func.sum(LiveViewer.sign_count)).filter(
+                            LiveViewer.living_id == record.id,
+                            LiveViewer.is_signed == True
+                        ).scalar() or 0
+                        
+                        # 获取首次签到时间
+                        first_sign = stats_session.query(func.min(LiveViewer.sign_time)).filter(
+                            LiveViewer.living_id == record.id,
+                            LiveViewer.is_signed == True
+                        ).scalar()
+                        
+                        sign_stats = {
+                            "unique_signers": unique_signers,
+                            "sign_count": sign_count,
+                            "sign_time": first_sign
+                        }
+                    
                     record_data["sign_count"] = sign_stats["unique_signers"]  # 使用unique_signers作为签到人数
                     record_data["total_sign_count"] = sign_stats["sign_count"]  # 总签到次数
                     record_data["sign_time"] = sign_stats["sign_time"]
+                    
+                    # 添加状态字段
+                    record_data["is_viewer_fetched"] = record.is_viewer_fetched
+                    record_data["is_sign_imported"] = record.is_sign_imported
+                    record_data["is_doc_uploaded"] = record.is_doc_uploaded
+                    record_data["is_remote_synced"] = record.is_remote_synced
                     
                     records_data.append(record_data)
                 
@@ -372,6 +506,30 @@ class LiveListPage(QWidget):
                 
                 # 签到次数
                 self.table.setItem(row, 10, QTableWidgetItem(str(record_data["total_sign_count"])))
+                
+                # 观看信息状态
+                viewer_fetched_text = "已拉取" if record_data["is_viewer_fetched"] == 1 else "未拉取"
+                viewer_item = QTableWidgetItem(viewer_fetched_text)
+                viewer_item.setForeground(Qt.green if record_data["is_viewer_fetched"] == 1 else Qt.red)
+                self.table.setItem(row, 11, viewer_item)
+                
+                # 签到导入状态
+                sign_imported_text = "已导入" if record_data["is_sign_imported"] == 1 else "未导入"
+                sign_item = QTableWidgetItem(sign_imported_text)
+                sign_item.setForeground(Qt.green if record_data["is_sign_imported"] == 1 else Qt.red)
+                self.table.setItem(row, 12, sign_item)
+                
+                # 企微文档状态
+                doc_uploaded_text = "已上传" if record_data["is_doc_uploaded"] == 1 else "未上传"
+                doc_item = QTableWidgetItem(doc_uploaded_text)
+                doc_item.setForeground(Qt.green if record_data["is_doc_uploaded"] == 1 else Qt.red)
+                self.table.setItem(row, 13, doc_item)
+                
+                # 远程同步状态
+                remote_synced_text = "已同步" if record_data["is_remote_synced"] == 1 else "未同步"
+                remote_item = QTableWidgetItem(remote_synced_text)
+                remote_item.setForeground(Qt.green if record_data["is_remote_synced"] == 1 else Qt.red)
+                self.table.setItem(row, 14, remote_item)
                 
                 # 操作按钮
                 btn_widget = QWidget()
@@ -426,7 +584,7 @@ class LiveListPage(QWidget):
                     cancel_btn.clicked.connect(lambda checked, r=living: self.cancel_live(r))
                     btn_layout.addWidget(cancel_btn)
                 
-                self.table.setCellWidget(row, 11, btn_widget)
+                self.table.setCellWidget(row, 15, btn_widget)
                 
             # 更新分页信息
             self.page_label.setText(f"第 {self.current_page} 页 / 共 {self.total_pages} 页")
@@ -461,6 +619,17 @@ class LiveListPage(QWidget):
             live: 直播信息
         """
         try:
+            # 从数据库获取最新记录，确保状态是最新的
+            with self.db_manager.get_session() as session:
+                record = session.query(Living).filter_by(livingid=live.livingid).first()
+                if record:
+                    # 使用最新的数据库记录创建详情对话框
+                    dialog = LiveDetailsDialog(record)
+                else:
+                    # 如果找不到记录，使用传入的live对象
+                    dialog = LiveDetailsDialog(live)
+                dialog.exec()
+                
             # 获取直播详情
             response = self.wecom_api.get_living_info(live.livingid)
             
@@ -495,10 +664,6 @@ class LiveListPage(QWidget):
                                     4: LivingStatus.CANCELLED
                                 }
                                 db_live.status = status_map.get(status_value, LivingStatus.RESERVED)
-                
-                # 显示详情对话框
-                dialog = LiveDetailsDialog(live)
-                dialog.exec()
             else:
                 ErrorHandler.handle_warning(
                     f"获取直播详情失败：{response.get('errmsg')}",
@@ -521,8 +686,9 @@ class LiveListPage(QWidget):
             if not confirm:
                 return
                 
-            # 显示进度提示
-            QMessageBox.information(self, "同步进行中", "正在同步直播数据，请稍候...")
+            # 显示倒计时提示（自动3秒关闭）
+            msg_box = AutoCloseMessageBox("同步进行中", "正在同步直播数据，请稍候...", 3000, self)
+            msg_box.exec()
             
             # 获取用于API调用的用户ID列表
             user_ids_for_api = []
@@ -727,6 +893,8 @@ class LiveListPage(QWidget):
                                 exists.mic_num = final_data.get("mic_num", exists.mic_num)
                                 exists.online_count = final_data.get("online_count", exists.online_count)
                                 exists.subscribe_count = final_data.get("subscribe_count", exists.subscribe_count)
+                                # 设置远程同步状态为已同步
+                                exists.is_remote_synced = 1
                                 updated_count += 1
                             else:
                                 # 创建新记录
@@ -776,7 +944,8 @@ class LiveListPage(QWidget):
                                     comment_num=final_data.get("comment_num", 0),
                                     mic_num=final_data.get("mic_num", 0),
                                     online_count=final_data.get("online_count", 0),
-                                    subscribe_count=final_data.get("subscribe_count", 0)
+                                    subscribe_count=final_data.get("subscribe_count", 0),
+                                    is_remote_synced=1  # 设置远程同步状态为已同步
                                 )
                                 session.add(new_living)
                                 created_count += 1
@@ -876,6 +1045,14 @@ class LiveListPage(QWidget):
                 
             # TODO: 实现签到导入逻辑
             
+            # 设置签到导入标志
+            with self.db_manager.get_session() as session:
+                # 查询并更新直播记录
+                living_record = session.query(Living).filter_by(id=live.id).first()
+                if living_record:
+                    living_record.is_sign_imported = 1
+                    session.commit()
+            
             dialog.add_success(f"成功导入 {len(df)} 条签到记录")
             dialog.finish()
             
@@ -919,8 +1096,37 @@ class LiveListPage(QWidget):
                     anchor_name = f"{user.name}({record.anchor_userid})" if user else record.anchor_userid
                     
                     # 获取签到统计信息
-                    from src.models.sign_record import SignRecord
-                    sign_stats = SignRecord.get_sign_statistics(record.id)
+                    from src.models.live_viewer import LiveViewer
+                    # 使用 LiveViewer 查询签到统计
+                    sign_stats = {}
+                    with self.db_manager.get_session() as stats_session:
+                        # 获取不同的签到人数
+                        unique_signers = stats_session.query(func.count(LiveViewer.id)).filter(
+                            LiveViewer.living_id == record.id,
+                            LiveViewer.is_signed == True
+                        ).scalar() or 0
+                        
+                        # 获取总签到次数
+                        sign_count = stats_session.query(func.sum(LiveViewer.sign_count)).filter(
+                            LiveViewer.living_id == record.id,
+                            LiveViewer.is_signed == True
+                        ).scalar() or 0
+                        
+                        # 获取首次签到时间
+                        first_sign = stats_session.query(func.min(LiveViewer.sign_time)).filter(
+                            LiveViewer.living_id == record.id,
+                            LiveViewer.is_signed == True
+                        ).scalar()
+                        
+                        sign_stats = {
+                            "unique_signers": unique_signers,
+                            "sign_count": sign_count,
+                            "sign_time": first_sign
+                        }
+                    
+                    record_data["sign_count"] = sign_stats["unique_signers"]  # 使用unique_signers作为签到人数
+                    record_data["total_sign_count"] = sign_stats["sign_count"]  # 总签到次数
+                    record_data["sign_time"] = sign_stats["sign_time"]
                     
                     # 获取直播类型
                     type_text = {
@@ -950,6 +1156,10 @@ class LiveListPage(QWidget):
                         "签到人数": sign_stats["unique_signers"],  # 不同的签到人数
                         "签到次数": sign_stats["sign_count"],      # 总签到次数
                         "首次签到时间": sign_stats["sign_time"] if sign_stats["sign_time"] else "-",
+                        "已拉取观看信息": "是" if record.is_viewer_fetched == 1 else "否",
+                        "已导入签到": "是" if record.is_sign_imported == 1 else "否",
+                        "已上传企微文档": "是" if record.is_doc_uploaded == 1 else "否",
+                        "已远程同步": "是" if record.is_remote_synced == 1 else "否",
                         "记录创建时间": record.created_at.strftime("%Y-%m-%d %H:%M:%S") if record.created_at else "",
                         "记录更新时间": record.updated_at.strftime("%Y-%m-%d %H:%M:%S") if record.updated_at else ""
                     })
@@ -973,6 +1183,12 @@ class LiveListPage(QWidget):
         # 清空所有搜索条件
         self.live_title.clear()
         self.live_status.setCurrentIndex(0)  # 设置为"全部"
+        
+        # 重置新增的状态字段
+        self.viewer_fetched_status.setCurrentIndex(0)  # 设置为"全部"
+        self.sign_imported_status.setCurrentIndex(0)  # 设置为"全部"
+        self.doc_uploaded_status.setCurrentIndex(0)  # 设置为"全部"
+        self.remote_synced_status.setCurrentIndex(0)  # 设置为"全部"
         
         # 重置日期时间范围
         self.start_date_time.setDateTime(QDateTime.currentDateTime().addMonths(-1))
@@ -998,6 +1214,8 @@ class LiveDetailsDialog(QDialog):
         self.live_info = live_info  # 现在直接接收Living对象
         from src.core.database import DatabaseManager
         self.db_manager = DatabaseManager()  # 直接创建实例而不是调用get_db方法
+        # 打印日志，检查状态值
+        logger.debug(f"LiveDetailsDialog初始化 - 状态值: is_remote_synced={self.live_info.is_remote_synced}")
         self.init_ui()
         
     def init_ui(self):
@@ -1085,6 +1303,37 @@ class LiveDetailsDialog(QDialog):
             desc_label = QLabel(self.live_info.description)
             desc_label.setWordWrap(True)  # 允许文本自动换行
             basic_layout.addRow("直播描述:", desc_label)
+            
+        # 状态标记
+        status_layout = QHBoxLayout()
+        status_layout.setSpacing(15)
+        
+        # 是否拉取观看信息
+        viewer_fetched_status = "已拉取" if self.live_info.is_viewer_fetched == 1 else "未拉取"
+        viewer_label = QLabel(f"观看信息: {viewer_fetched_status}")
+        viewer_label.setStyleSheet(f"color: {'green' if self.live_info.is_viewer_fetched == 1 else 'red'}")
+        status_layout.addWidget(viewer_label)
+        
+        # 是否导入签到
+        sign_imported_status = "已导入" if self.live_info.is_sign_imported == 1 else "未导入"
+        sign_label = QLabel(f"签到导入: {sign_imported_status}")
+        sign_label.setStyleSheet(f"color: {'green' if self.live_info.is_sign_imported == 1 else 'red'}")
+        status_layout.addWidget(sign_label)
+        
+        # 是否上传企微文档
+        doc_uploaded_status = "已上传" if self.live_info.is_doc_uploaded == 1 else "未上传"
+        doc_label = QLabel(f"企微文档: {doc_uploaded_status}")
+        doc_label.setStyleSheet(f"color: {'green' if self.live_info.is_doc_uploaded == 1 else 'red'}")
+        status_layout.addWidget(doc_label)
+        
+        # 是否远程同步
+        remote_synced_status = "已同步" if self.live_info.is_remote_synced == 1 else "未同步"
+        remote_label = QLabel(f"远程同步: {remote_synced_status}")
+        remote_label.setStyleSheet(f"color: {'green' if self.live_info.is_remote_synced == 1 else 'red'}")
+        status_layout.addWidget(remote_label)
+        
+        # 添加状态布局
+        basic_layout.addRow("数据状态:", status_layout)
             
         # 添加基本信息组到主布局
         main_layout.addWidget(basic_group)

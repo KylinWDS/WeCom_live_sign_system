@@ -8,7 +8,7 @@ from src.core.wecom_api import WeComAPI
 from src.core.config_manager import ConfigManager
 from models.live_booking import LiveBooking
 from models.live_viewer import LiveViewer
-from models.sign_record import SignRecord
+from models.live_viewer import LiveViewer
 from utils.cache import Cache
 
 logger = get_logger(__name__)

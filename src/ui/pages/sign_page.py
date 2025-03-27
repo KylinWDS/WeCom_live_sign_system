@@ -12,7 +12,7 @@ from ..managers.animation import AnimationManager
 from utils.performance_manager import PerformanceManager
 from utils.error_handler import ErrorHandler
 from core.database import DatabaseManager
-from models.sign import SignRecord
+from models.live_viewer import LiveViewer
 from ..dialogs.io_dialog import IODialog
 import pandas as pd
 import os
@@ -190,20 +190,20 @@ class SignPage(QWidget):
         try:
             # 获取签到记录列表
             with self.db_manager.get_session() as session:
-                query = session.query(SignRecord)
+                query = session.query(LiveViewer).filter(LiveViewer.is_signed == True)
                 
                 # 应用搜索条件
                 if self.live_session.text():
-                    query = query.filter(SignRecord.live_session.like(f"%{self.live_session.text()}%"))
+                    query = query.filter(LiveViewer.living.has(title=f"%{self.live_session.text()}%"))
                     
                 if self.sign_date.date():
-                    query = query.filter(SignRecord.sign_time >= self.sign_date.date().toPyDate())
+                    query = query.filter(LiveViewer.sign_time >= self.sign_date.date().toPyDate())
                     
                 if self.member.text():
-                    query = query.filter(SignRecord.member.like(f"%{self.member.text()}%"))
+                    query = query.filter(LiveViewer.username.like(f"%{self.member.text()}%"))
                     
                 if self.department.text():
-                    query = query.filter(SignRecord.department.like(f"%{self.department.text()}%"))
+                    query = query.filter(LiveViewer.department.like(f"%{self.department.text()}%"))
                     
                 # 计算总页数
                 total = query.count()
@@ -215,12 +215,13 @@ class SignPage(QWidget):
             # 更新表格
             self.table.setRowCount(len(records))
             for row, record in enumerate(records):
-                self.table.setItem(row, 0, QTableWidgetItem(record.live_session))
-                self.table.setItem(row, 1, QTableWidgetItem(record.sign_time.strftime("%Y-%m-%d %H:%M:%S")))
-                self.table.setItem(row, 2, QTableWidgetItem(str(record.sign_count)))
-                self.table.setItem(row, 3, QTableWidgetItem(record.member))
+                live_title = record.living.title if record.living else "未知直播"
+                self.table.setItem(row, 0, QTableWidgetItem(live_title))
+                self.table.setItem(row, 1, QTableWidgetItem(record.sign_time.strftime("%Y-%m-%d %H:%M:%S") if record.sign_time else ""))
+                self.table.setItem(row, 2, QTableWidgetItem("-"))  # 此字段在新模型中不存在
+                self.table.setItem(row, 3, QTableWidgetItem(record.username))
                 self.table.setItem(row, 4, QTableWidgetItem(record.department))
-                self.table.setItem(row, 5, QTableWidgetItem(str(record.sign_times)))
+                self.table.setItem(row, 5, QTableWidgetItem(str(record.sign_count)))
                 self.table.setItem(row, 6, QTableWidgetItem(f"{record.watch_duration}分钟"))
                 
                 # 操作按钮
@@ -283,16 +284,16 @@ class SignPage(QWidget):
                 # 导入数据
                 with self.db_manager.get_session() as session:
                     for _, row in df.iterrows():
-                        record = SignRecord(
-                            live_session=row["直播场次"],
-                            sign_time=row["签到时间"],
-                            sign_count=row["签到人数"],
-                            member=row["签到成员"],
+                        # 创建或更新LiveViewer记录
+                        viewer = LiveViewer(
+                            username=row["签到成员"],
                             department=row["所在部门"],
-                            sign_times=row["签到次数"],
-                            watch_duration=row["观看时长"]
+                            sign_count=row.get("签到次数", 1),
+                            watch_duration=row.get("观看时长", 0),
+                            is_signed=True,
+                            sign_time=row["签到时间"]
                         )
-                        session.add(record)
+                        session.add(viewer)
                     session.commit()
                     
                 ErrorHandler.handle_info("导入签到信息成功", self, "成功")
@@ -302,7 +303,7 @@ class SignPage(QWidget):
             ErrorHandler.handle_error(e, self, "导入签到信息失败")
             
     @PerformanceManager.measure_operation("show_detail")
-    def show_detail(self, record: SignRecord):
+    def show_detail(self, record: LiveViewer):
         """显示详情
         
         Args:
@@ -316,7 +317,7 @@ class SignPage(QWidget):
             ErrorHandler.handle_error(e, self, "显示详情失败")
             
     @PerformanceManager.measure_operation("delete_record")
-    def delete_record(self, record: SignRecord):
+    def delete_record(self, record: LiveViewer):
         """删除记录
         
         Args:
@@ -333,7 +334,7 @@ class SignPage(QWidget):
                 
             # 删除记录
             with self.db_manager.get_session() as session:
-                session.query(SignRecord).filter_by(id=record.id).delete()
+                session.query(LiveViewer).filter_by(id=record.id).delete()
                 session.commit()
                 
             ErrorHandler.handle_info("删除签到记录成功", self, "成功")
@@ -358,19 +359,20 @@ class SignPage(QWidget):
                 
             # 获取所有签到记录
             with self.db_manager.get_session() as session:
-                records = session.query(SignRecord).all()
+                records = session.query(LiveViewer).filter(LiveViewer.is_signed == True).all()
                 
             # 创建DataFrame
             data = []
             for record in records:
+                live_title = record.living.title if record.living else "未知直播"
                 data.append({
-                    "直播场次": record.live_session,
-                    "签到时间": record.sign_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "签到人数": record.sign_count,
-                    "签到成员": record.member,
+                    "直播场次": live_title,
+                    "签到时间": record.sign_time.strftime("%Y-%m-%d %H:%M:%S") if record.sign_time else "",
+                    "签到成员": record.username,
                     "所在部门": record.department,
-                    "签到次数": record.sign_times,
-                    "观看时长": record.watch_duration
+                    "签到次数": record.sign_count,
+                    "观看时长": record.watch_duration,
+                    "奖励金额": record.reward_amount
                 })
             df = pd.DataFrame(data)
             

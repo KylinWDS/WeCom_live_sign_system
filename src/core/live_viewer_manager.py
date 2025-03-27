@@ -3,9 +3,8 @@ import requests
 from sqlalchemy.orm import Session
 from src.utils.logger import get_logger
 from src.models.live_booking import LiveBooking
+from src.models.live_viewer import LiveViewer, UserSource
 from src.models.live_viewer import LiveViewer
-from src.models.invitor_cache import InvitorCache
-from src.models.sign_record import SignRecord
 from src.core.token_manager import TokenManager
 
 logger = get_logger(__name__)
@@ -43,40 +42,31 @@ class LiveViewerManager:
             str: 邀请人名称
         """
         try:
-            # 1. 从缓存中获取
-            session = self.db_manager.get_session()
-            try:
-                cache = session.query(InvitorCache).filter_by(invitor_id=invitor_id).first()
-                if cache:
-                    return cache.name
-            finally:
-                session.close()
-            
-            # 2. 从观看统计中获取
+            # 1. 从观看统计中获取
             if stat_info and "users" in stat_info:
                 for user in stat_info["users"]:
                     if user.get("userid") == invitor_id:
                         return user.get("name", "")
             
-            # 3. 从外部用户统计中获取
+            # 2. 从外部用户统计中获取
             if stat_info and "external_users" in stat_info:
                 for user in stat_info["external_users"]:
                     if user.get("external_userid") == invitor_id:
                         return user.get("name", "")
             
-            # 4. 从数据库中的观看记录获取
+            # 3. 从数据库中的观看记录获取
             session = self.db_manager.get_session()
             try:
                 viewer = session.query(LiveViewer).filter_by(
                     living_id=living_id,
-                    viewer_id=viewer_id
+                    userid=invitor_id
                 ).first()
-                if viewer and viewer.invitor_name:
-                    return viewer.invitor_name
+                if viewer and viewer.name:
+                    return viewer.name
             finally:
                 session.close()
             
-            # 5. 尝试从官方接口获取
+            # 4. 尝试从官方接口获取
             try:
                 token = self.token_manager.get_token()
                 if invitor_id.startswith("wmd"):  # 外部用户
@@ -97,8 +87,6 @@ class LiveViewerManager:
                 
                 if result["errcode"] == 0:
                     name = result.get("name", "")
-                    # 更新缓存
-                    self.update_invitor_cache(invitor_id, name)
                     return name
                     
             except Exception as e:
@@ -122,33 +110,15 @@ class LiveViewerManager:
             session.close()
             
     def get_invitor_name_from_cache(self, invitor_id):
-        """从缓存获取邀请人名称"""
-        session = self.db_manager.get_session()
-        try:
-            cache = session.query(InvitorCache).filter_by(invitor_id=invitor_id).first()
-            if cache:
-                return cache.name
-            return None
-        finally:
-            session.close()
+        """从缓存获取邀请人名称（不再使用缓存）"""
+        logger.debug(f"尝试从缓存获取邀请人名称: {invitor_id}，但缓存功能已移除")
+        return None
             
     def update_invitor_cache(self, invitor_id, name):
-        """更新邀请人名称缓存"""
-        session = self.db_manager.get_session()
-        try:
-            cache = session.query(InvitorCache).filter_by(invitor_id=invitor_id).first()
-            if cache:
-                cache.name = name
-                cache.updated_at = datetime.now()
-            else:
-                cache = InvitorCache(invitor_id=invitor_id, name=name)
-                session.add(cache)
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            logger.error(f"更新邀请人缓存失败: {str(e)}")
-        finally:
-            session.close()
+        """更新邀请人名称缓存（不再使用缓存）"""
+        logger.debug(f"尝试更新邀请人缓存: {invitor_id} -> {name}，但缓存功能已移除")
+        # 这个函数现在不做任何实际操作，缓存功能已被移除
+        pass
             
     def process_viewer_info(self, living_id):
         """处理观看者信息"""
@@ -215,28 +185,32 @@ class LiveViewerManager:
                     stat_info=stat_info
                 )
                 
-                # 计算观看时长占比
-                live_info = self.get_live_info(living_id)
-                total_duration = (live_info.end_time - live_info.start_time).total_seconds()
-                watch_percentage = (user["watch_time"] / total_duration) * 100 if total_duration > 0 else 0
-                
-                viewer = LiveViewer(
+                # 检查是否已存在该用户的记录
+                existing_viewer = session.query(LiveViewer).filter_by(
                     living_id=living_id,
-                    user_id=user["userid"],
-                    user_type=1,  # 企业成员
-                    first_enter_time=datetime.fromtimestamp(user.get("first_enter_time", 0)),
-                    last_leave_time=datetime.fromtimestamp(user.get("last_leave_time", 0)),
-                    total_watch_time=user["watch_time"],
-                    watch_percentage=watch_percentage,
-                    is_comment=user.get("is_comment", False),
-                    comment_count=user.get("comment_count", 0),
-                    is_mic=user.get("is_mic", False),
-                    mic_duration=user.get("mic_duration", 0),
-                    invitor_id=user.get("invitor_userid"),
-                    invitor_name=invitor_name,
-                    invitor_type=1  # 企业成员
-                )
-                session.add(viewer)
+                    userid=user["userid"]
+                ).first()
+                
+                if existing_viewer:
+                    # 更新现有记录
+                    existing_viewer.update_watch_stats(
+                        watch_time=user["watch_time"],
+                        is_comment=1 if user.get("is_comment", False) else 0,
+                        is_mic=1 if user.get("is_mic", False) else 0
+                    )
+                    if user.get("invitor_userid") and invitor_name:
+                        existing_viewer.record_invitation(user["invitor_userid"], invitor_name)
+                else:
+                    # 创建新记录
+                    viewer = LiveViewer.from_api_data(
+                        living_id=living_id,
+                        user_data=user,
+                        source=UserSource.INTERNAL
+                    )
+                    if user.get("invitor_userid") and invitor_name:
+                        viewer.record_invitation(user["invitor_userid"], invitor_name)
+                    session.add(viewer)
+                    
             session.commit()
         except Exception as e:
             session.rollback()
@@ -253,33 +227,36 @@ class LiveViewerManager:
                 invitor_name = self.get_invitor_name(
                     living_id=living_id,
                     viewer_id=user["external_userid"],
-                    invitor_id=user.get("invitor_external_userid"),
+                    invitor_id=user.get("invitor_userid"),
                     stat_info=stat_info
                 )
                 
-                # 计算观看时长占比
-                live_info = self.get_live_info(living_id)
-                total_duration = (live_info.end_time - live_info.start_time).total_seconds()
-                watch_percentage = (user["watch_time"] / total_duration) * 100 if total_duration > 0 else 0
-                
-                viewer = LiveViewer(
+                # 检查是否已存在该用户的记录
+                existing_viewer = session.query(LiveViewer).filter_by(
                     living_id=living_id,
-                    user_id=user["external_userid"],
-                    user_name=user["name"],
-                    user_type=2,  # 外部用户
-                    first_enter_time=datetime.fromtimestamp(user.get("first_enter_time", 0)),
-                    last_leave_time=datetime.fromtimestamp(user.get("last_leave_time", 0)),
-                    total_watch_time=user["watch_time"],
-                    watch_percentage=watch_percentage,
-                    is_comment=user.get("is_comment", False),
-                    comment_count=user.get("comment_count", 0),
-                    is_mic=user.get("is_mic", False),
-                    mic_duration=user.get("mic_duration", 0),
-                    invitor_id=user.get("invitor_external_userid"),
-                    invitor_name=invitor_name,
-                    invitor_type=2  # 外部用户
-                )
-                session.add(viewer)
+                    userid=user["external_userid"]
+                ).first()
+                
+                if existing_viewer:
+                    # 更新现有记录
+                    existing_viewer.update_watch_stats(
+                        watch_time=user["watch_time"],
+                        is_comment=1 if user.get("is_comment", False) else 0,
+                        is_mic=1 if user.get("is_mic", False) else 0
+                    )
+                    if user.get("invitor_userid") and invitor_name:
+                        existing_viewer.record_invitation(user["invitor_userid"], invitor_name)
+                else:
+                    # 创建新记录
+                    viewer = LiveViewer.from_api_data(
+                        living_id=living_id,
+                        user_data=user,
+                        source=UserSource.EXTERNAL
+                    )
+                    if user.get("invitor_userid") and invitor_name:
+                        viewer.record_invitation(user["invitor_userid"], invitor_name)
+                    session.add(viewer)
+                    
             session.commit()
         except Exception as e:
             session.rollback()
@@ -301,33 +278,18 @@ class LiveViewerManager:
             success_count = 0
             error_count = 0
             
-            # 获取所有签到记录
-            sign_records = session.query(SignRecord).filter_by(living_id=living_id).all()
-            
             # 获取所有观看记录
             viewers = session.query(LiveViewer).filter_by(living_id=living_id).all()
             
-            # 创建用户ID到签到记录的映射
-            sign_map = {record.user_id: record for record in sign_records}
-            
-            # 更新观看记录的签到信息
+            # 更新签到信息
             for viewer in viewers:
                 try:
-                    if viewer.user_id in sign_map:
-                        sign_record = sign_map[viewer.user_id]
-                        viewer.is_signed = True
-                        viewer.sign_time = sign_record.sign_time
-                        viewer.department = sign_record.department
-                        viewer.sign_count = sign_record.sign_count  # 添加签到次数
-                        success_count += 1
-                    else:
-                        viewer.is_signed = False
-                        viewer.sign_time = None
-                        viewer.department = None
-                        viewer.sign_count = 0  # 设置签到次数为0
+                    # 检查是否符合自动签到条件（例如观看时长超过5分钟）
+                    if viewer.watch_time >= 300 and not viewer.is_signed:
+                        viewer.record_sign(sign_type="auto")
                         success_count += 1
                 except Exception as e:
-                    logger.error(f"更新观看者 {viewer.user_id} 签到信息失败: {str(e)}")
+                    logger.error(f"更新观看者 {viewer.userid} 签到信息失败: {str(e)}")
                     error_count += 1
                     
             session.commit()
@@ -353,19 +315,22 @@ class LiveViewerManager:
         try:
             viewers = session.query(LiveViewer).filter_by(living_id=living_id).all()
             
+            internal_viewers = [v for v in viewers if v.user_source == UserSource.INTERNAL]
+            external_viewers = [v for v in viewers if v.user_source == UserSource.EXTERNAL]
+            
             stats = {
                 "total_viewers": len(viewers),
-                "internal_viewers": len([v for v in viewers if v.user_type == 1]),
-                "external_viewers": len([v for v in viewers if v.user_type == 2]),
-                "avg_watch_time": sum(v.total_watch_time for v in viewers) / len(viewers) if viewers else 0,
-                "avg_watch_percentage": sum(v.watch_percentage for v in viewers) / len(viewers) if viewers else 0,
-                "comment_count": sum(v.comment_count for v in viewers),
-                "mic_count": len([v for v in viewers if v.is_mic]),
-                # 添加签到相关统计
-                "signed_count": len([v for v in viewers if v.is_signed]),
-                "sign_rate": (len([v for v in viewers if v.is_signed]) / len(viewers) * 100) if viewers else 0,
-                "total_sign_count": sum(v.sign_count for v in viewers),  # 总签到次数
-                "avg_sign_count": sum(v.sign_count for v in viewers) / len(viewers) if viewers else 0  # 平均签到次数
+                "internal_viewers": len(internal_viewers),
+                "external_viewers": len(external_viewers),
+                "avg_watch_time": sum(v.watch_time for v in viewers) / len(viewers) if viewers else 0,
+                "comment_count": sum(1 for v in viewers if v.is_comment == 1),
+                "mic_count": sum(1 for v in viewers if v.is_mic == 1),
+                # 签到相关统计
+                "signed_count": sum(1 for v in viewers if v.is_signed),
+                "sign_rate": (sum(1 for v in viewers if v.is_signed) / len(viewers) * 100) if viewers else 0,
+                # 奖励相关统计
+                "reward_eligible_count": sum(1 for v in viewers if v.is_reward_eligible),
+                "reward_total_amount": sum(v.reward_amount for v in viewers)
             }
             
             return stats

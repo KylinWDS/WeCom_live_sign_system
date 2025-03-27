@@ -3,8 +3,7 @@ from datetime import datetime
 from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 from src.models.live_booking import LiveBooking
-from src.models.live_viewer import LiveViewer
-from src.models.sign_record import SignRecord
+from src.models.live_viewer import LiveViewer, UserSource
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -111,10 +110,12 @@ class ImportManager:
                         # 创建观众记录
                         viewer = LiveViewer(
                             living_id=living_id,
-                            user_id=str(row["用户ID"]),
-                            user_name=str(row["用户名"]),
+                            userid=str(row["用户ID"]),
+                            name=str(row["用户名"]),
+                            user_source=UserSource.INTERNAL if row.get("用户类型", 1) == 2 else UserSource.EXTERNAL,
+                            user_type=int(row.get("用户类型", 1)),
                             department=str(row.get("部门", "")),
-                            watch_duration=float(row["观看时长"])
+                            watch_time=int(float(row["观看时长"]))
                         )
                         
                         session.add(viewer)
@@ -172,15 +173,18 @@ class ImportManager:
                 for _, row in df.iterrows():
                     try:
                         # 创建签到记录
-                        sign_record = SignRecord(
+                        live_viewer = LiveViewer(
                             living_id=living_id,
-                            user_id=str(row["用户ID"]),
-                            user_name=str(row["用户名"]),
+                            userid=str(row["用户ID"]),
+                            name=str(row["用户名"]),
+                            user_source=UserSource.INTERNAL if row.get("用户类型", 1) == 2 else UserSource.EXTERNAL,
+                            user_type=int(row.get("用户类型", 1)),
+                            is_signed=True,
                             sign_time=row["签到时间"],
-                            status="已签到"
+                            sign_type="import"
                         )
                         
-                        session.add(sign_record)
+                        session.add(live_viewer)
                         success_count += 1
                         
                     except Exception as e:

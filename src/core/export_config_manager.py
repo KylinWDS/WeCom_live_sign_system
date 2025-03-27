@@ -1,16 +1,17 @@
 from datetime import datetime
 from sqlalchemy.orm import Session
 from src.utils.logger import get_logger
-from src.models.export_config import ExportConfig
+# from src.models.export_config import ExportConfig  -- 已删除
 
 logger = get_logger(__name__)
 
 class ExportConfigManager:
     def __init__(self, db_manager):
         self.db_manager = db_manager
+        logger.info("导出配置管理器已初始化，但ExportConfig模型已移除")
         
     def save_config(self, user_id, config_name, config_type, selected_fields, filter_conditions=None, sort_conditions=None):
-        """保存导出配置
+        """保存导出配置（已弃用）
         
         Args:
             user_id: 用户ID
@@ -23,28 +24,12 @@ class ExportConfigManager:
         Returns:
             bool: 是否保存成功
         """
-        session = self.db_manager.get_session()
-        try:
-            config = ExportConfig(
-                user_id=user_id,
-                config_name=config_name,
-                config_type=config_type,
-                selected_fields=selected_fields,
-                filter_conditions=filter_conditions,
-                sort_conditions=sort_conditions
-            )
-            session.add(config)
-            session.commit()
-            return True
-        except Exception as e:
-            session.rollback()
-            logger.error(f"保存导出配置失败: {str(e)}")
-            return False
-        finally:
-            session.close()
+        logger.warning("试图保存导出配置，但ExportConfig模型已移除")
+        logger.debug(f"配置信息: {user_id}, {config_name}, {config_type}, {len(selected_fields) if selected_fields else 0}个字段")
+        return False
             
     def get_user_configs(self, user_id, config_type=None):
-        """获取用户的导出配置列表
+        """获取用户的导出配置列表（已弃用）
         
         Args:
             user_id: 用户ID
@@ -53,20 +38,11 @@ class ExportConfigManager:
         Returns:
             list: 配置列表
         """
-        session = self.db_manager.get_session()
-        try:
-            query = session.query(ExportConfig).filter_by(user_id=user_id)
-            if config_type:
-                query = query.filter_by(config_type=config_type)
-            return query.all()
-        except Exception as e:
-            logger.error(f"获取导出配置失败: {str(e)}")
-            return []
-        finally:
-            session.close()
+        logger.warning("试图获取导出配置列表，但ExportConfig模型已移除")
+        return []
             
     def get_config(self, user_id, config_name, config_type):
-        """获取指定的导出配置
+        """获取指定的导出配置（已弃用）
         
         Args:
             user_id: 用户ID
@@ -76,21 +52,11 @@ class ExportConfigManager:
         Returns:
             ExportConfig: 配置对象
         """
-        session = self.db_manager.get_session()
-        try:
-            return session.query(ExportConfig).filter_by(
-                user_id=user_id,
-                config_name=config_name,
-                config_type=config_type
-            ).first()
-        except Exception as e:
-            logger.error(f"获取导出配置失败: {str(e)}")
-            return None
-        finally:
-            session.close()
+        logger.warning("试图获取导出配置，但ExportConfig模型已移除")
+        return None
             
     def update_config(self, user_id, config_name, config_type, selected_fields, filter_conditions=None, sort_conditions=None):
-        """更新导出配置
+        """更新导出配置（已弃用）
         
         Args:
             user_id: 用户ID
@@ -103,26 +69,11 @@ class ExportConfigManager:
         Returns:
             bool: 是否更新成功
         """
-        session = self.db_manager.get_session()
-        try:
-            config = self.get_config(user_id, config_name, config_type)
-            if config:
-                config.selected_fields = selected_fields
-                config.filter_conditions = filter_conditions
-                config.sort_conditions = sort_conditions
-                config.updated_at = datetime.now()
-                session.commit()
-                return True
-            return False
-        except Exception as e:
-            session.rollback()
-            logger.error(f"更新导出配置失败: {str(e)}")
-            return False
-        finally:
-            session.close()
+        logger.warning("试图更新导出配置，但ExportConfig模型已移除")
+        return False
             
     def delete_config(self, user_id, config_name, config_type):
-        """删除导出配置
+        """删除导出配置（已弃用）
         
         Args:
             user_id: 用户ID
@@ -132,20 +83,8 @@ class ExportConfigManager:
         Returns:
             bool: 是否删除成功
         """
-        session = self.db_manager.get_session()
-        try:
-            config = self.get_config(user_id, config_name, config_type)
-            if config:
-                session.delete(config)
-                session.commit()
-                return True
-            return False
-        except Exception as e:
-            session.rollback()
-            logger.error(f"删除导出配置失败: {str(e)}")
-            return False
-        finally:
-            session.close()
+        logger.warning("试图删除导出配置，但ExportConfig模型已移除")
+        return False
             
     def get_available_fields(self, config_type):
         """获取可用的导出字段列表
@@ -156,6 +95,7 @@ class ExportConfigManager:
         Returns:
             list: 字段列表
         """
+        # 这个方法可以保留，因为它不依赖于ExportConfig模型
         # 根据不同的配置类型返回对应的可用字段
         field_maps = {
             "viewer_stats": [

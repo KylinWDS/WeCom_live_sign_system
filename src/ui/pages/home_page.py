@@ -17,6 +17,7 @@ from src.models.living import Living, LivingStatus
 from src.ui.components.dialogs.io_dialog import IODialog
 from src.core.auth_manager import AuthManager
 from src.models.user import User
+from src.models.live_viewer import LiveViewer
 import pandas as pd
 import os
 import datetime
@@ -203,12 +204,11 @@ class HomePage(QWidget):
             # 获取数据统计
             from src.models.living import Living
             from src.models.user import User
-            from src.models.sign_record import SignRecord
             
             # 获取直播、用户和签到数量
             live_count = session.query(Living).count()
             user_count = session.query(User).count()
-            sign_count = session.query(SignRecord).count()
+            sign_count = session.query(LiveViewer).filter(LiveViewer.is_signed == True).count()
             
             # 创建统计卡片
             stats_cards = [
@@ -304,11 +304,10 @@ class HomePage(QWidget):
                 self.value_user_count.setText(str(user_count))
                 
                 # 获取今日签到数
-                from src.models.sign_record import SignRecord
-                import datetime
                 today = datetime.date.today()
-                today_sign_count = session.query(SignRecord).filter(
-                    SignRecord.sign_time >= today
+                today_sign_count = session.query(LiveViewer).filter(
+                    LiveViewer.is_signed == True,
+                    LiveViewer.sign_time >= today
                 ).count()
                 self.value_today_sign_count.setText(str(today_sign_count))
                 
@@ -333,7 +332,10 @@ class HomePage(QWidget):
                     self.recent_table.setItem(row, 3, QTableWidgetItem(str(live.viewer_num)))
                     
                     # 获取签到人数
-                    sign_count = session.query(SignRecord).filter(SignRecord.living_id == live.id).count()
+                    sign_count = session.query(LiveViewer).filter(
+                        LiveViewer.living_id == live.id,
+                        LiveViewer.is_signed == True
+                    ).count()
                     self.recent_table.setItem(row, 4, QTableWidgetItem(str(sign_count)))
             """
         except Exception as e:

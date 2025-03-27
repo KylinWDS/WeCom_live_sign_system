@@ -13,11 +13,9 @@ import threading
 from src.utils.logger import get_logger
 from src.models.base import Base
 from src.models import User, UserRole
-from src.models.living import Living, WatchStat
+from src.models.living import Living
 from src.models.live_booking import LiveBooking
 from src.models.live_viewer import LiveViewer
-from src.models.sign_record import SignRecord
-from src.models.sign import Sign
 from contextlib import contextmanager
 from src.config.database import get_default_paths
 from sqlalchemy import inspect
@@ -154,11 +152,9 @@ class DatabaseManager:
             from src.models.user import User
             from src.models.live_booking import LiveBooking
             from src.models.live_viewer import LiveViewer
-            from src.models.sign_record import SignRecord
             from src.models.living import Living
-            from src.models.watch_stat import WatchStat
             from src.models.ip_record import IPRecord
-            from src.models.setting import Setting
+            from src.models.settings import Settings  # 修正设置模型的正确导入
             from src.models.corporation import Corporation
             from src.models.config_change import ConfigChange
             from src.models.operation_log import OperationLog
@@ -207,11 +203,9 @@ class DatabaseManager:
         try:
             # 导入所有模型类，确保它们被注册到Base.metadata中
             from src.models.user import User, UserRole
-            from src.models.living import Living, WatchStat
+            from src.models.living import Living
             from src.models.live_booking import LiveBooking
             from src.models.live_viewer import LiveViewer
-            from src.models.sign_record import SignRecord
-            from src.models.sign import Sign
             
             if force_recreate:
                 # 删除所有表
@@ -572,8 +566,10 @@ class DatabaseManager:
             logger.error(f"获取直播列表失败: {str(e)}")
             raise
     
+    # 注释掉不再使用的 get_all_signs 方法
+    """
     def get_all_signs(self) -> List[Sign]:
-        """获取所有签到记录"""
+        # 获取所有签到记录
         try:
             self.cursor.execute("SELECT * FROM signs ORDER BY sign_time DESC")
             rows = self.cursor.fetchall()
@@ -591,6 +587,7 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"获取签到记录失败: {str(e)}")
             raise
+    """
     
     def get_live_stats(self, days: int = 30) -> Dict[str, Any]:
         """获取直播统计数据
@@ -661,15 +658,15 @@ class DatabaseManager:
             logger.error(f"获取直播列表失败: {str(e)}")
             raise
     
-    def get_all_sign_records(self) -> List[SignRecord]:
+    def get_all_sign_records(self) -> List[LiveViewer]:
         """获取所有签到记录
         
         Returns:
-            List[SignRecord]: 签到记录列表
+            List[LiveViewer]: 签到记录列表
         """
         try:
             with self.get_session() as session:
-                return session.query(SignRecord).all()
+                return session.query(LiveViewer).filter(LiveViewer.is_signed == True).all()
         except Exception as e:
             logger.error(f"获取签到记录失败: {str(e)}")
             raise
@@ -693,12 +690,12 @@ class DatabaseManager:
             rankings = session.query(
                 Living.id,
                 Living.title,
-                func.count(WatchStat.id).label("watch_count"),
-                func.count(SignRecord.id).label("sign_count")
-            ).outerjoin(WatchStat).outerjoin(SignRecord).filter(
+                func.count(LiveViewer.id).label("watch_count"),
+                func.sum(LiveViewer.is_signed == True).label("sign_count")
+            ).outerjoin(LiveViewer).filter(
                 Living.living_start >= start_date
             ).group_by(Living.id).order_by(
-                func.count(WatchStat.id).desc()
+                func.count(LiveViewer.id).desc()
             ).limit(10).all()
             
             return [
@@ -715,7 +712,7 @@ class DatabaseManager:
             logger.error(f"获取直播排行数据失败: {str(e)}")
             return []
         finally:
-            session.close() 
+            session.close()
     
     def query_one(self, sql: str, params: tuple = None) -> Optional[tuple]:
         """执行SQL查询并返回第一条记录
