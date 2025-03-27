@@ -41,10 +41,8 @@ class LiveViewer(BaseModel):
     
     # 签到信息
     is_signed = Column(Boolean, default=False, comment="是否已签到")
-    sign_time = Column(DateTime, nullable=True, comment="签到时间")
-    sign_type = Column(String(20), nullable=True, comment="签到类型(自动/手动/导入)")
-    sign_location = Column(JSON, nullable=True, comment="签到地点")
-    sign_count = Column(Integer, default=0, comment="签到次数")
+    sign_time = Column(DateTime, nullable=True, comment="最后签到时间")
+    sign_count = Column(Integer, default=0, comment="合计签到次数")
     
     # 邀请关系
     invitor_userid = Column(String(50), nullable=True, comment="邀请人ID")
@@ -64,9 +62,12 @@ class LiveViewer(BaseModel):
     # 关联
     living = relationship("Living", back_populates="viewers")
     
+    # 签到记录关联
+    sign_records = relationship("LiveSignRecord", back_populates="viewer", cascade="all, delete-orphan")
+    
     # 兼容旧版关系
     live_booking_id = Column(Integer, ForeignKey("live_bookings.id"), nullable=True)
-    live_booking = relationship("LiveBooking", foreign_keys=[live_booking_id], backref="viewers_old")
+    live_booking = relationship("LiveBooking", foreign_keys=[live_booking_id], back_populates="viewers")
     
     def __init__(
         self,
@@ -83,8 +84,6 @@ class LiveViewer(BaseModel):
         access_channel: Optional[str] = None,
         is_signed: bool = False,
         sign_time: Optional[datetime] = None,
-        sign_type: Optional[str] = None,
-        sign_location: Optional[Dict[str, Any]] = None,
         sign_count: int = 0,
         invitor_userid: Optional[str] = None,
         invitor_name: Optional[str] = None,
@@ -108,8 +107,6 @@ class LiveViewer(BaseModel):
         self.access_channel = access_channel
         self.is_signed = is_signed
         self.sign_time = sign_time
-        self.sign_type = sign_type
-        self.sign_location = sign_location
         self.sign_count = sign_count
         self.invitor_userid = invitor_userid
         self.invitor_name = invitor_name
@@ -221,7 +218,11 @@ class LiveViewer(BaseModel):
         self, 
         sign_time: datetime = None, 
         sign_type: str = "auto", 
-        location: Dict[str, Any] = None
+        location: Dict[str, Any] = None,
+        create_record: bool = True,
+        living_id: str = None,
+        sign_sequence: int = 1,
+        sheet_name: str = None
     ) -> None:
         """记录签到
         
@@ -229,14 +230,36 @@ class LiveViewer(BaseModel):
             sign_time: 签到时间，默认为当前时间
             sign_type: 签到类型，默认为自动签到
             location: 签到地点信息
+            create_record: 是否创建签到记录，默认为True
+            living_id: 直播ID，对应livings表的livingid字段
+            sign_sequence: 第几次签到，对应导入签到文件的sheet顺序
+            sheet_name: 签到sheet页名称
         """
+        current_time = sign_time or datetime.now()
         self.is_signed = True
-        self.sign_time = sign_time or datetime.now()
-        self.sign_type = sign_type
-        self.sign_count += 1
+        self.sign_time = current_time  # 更新为最后一次签到时间
+        self.sign_count += 1  # 增加签到次数
         
-        if location:
-            self.sign_location = location
+        # 创建签到明细记录
+        if create_record and living_id:
+            from .live_sign_record import LiveSignRecord
+            sign_record = LiveSignRecord(
+                viewer_id=self.id,
+                sign_time=current_time,
+                sign_type=sign_type,
+                living_id=living_id,
+                sign_location=location,
+                sign_sequence=sign_sequence,
+                sheet_name=sheet_name
+            )
+            # 如果在会话中，则添加到会话
+            try:
+                from sqlalchemy.orm.session import object_session
+                session = object_session(self)
+                if session:
+                    session.add(sign_record)
+            except Exception as e:
+                logger.error(f"创建签到记录时出错: {str(e)}")
             
         # 检查是否符合奖励条件
         self.check_reward_criteria()
@@ -326,8 +349,7 @@ class LiveViewer(BaseModel):
             "access_channel": self.access_channel,
             "is_signed": self.is_signed,
             "sign_time": self.sign_time,
-            "sign_type": self.sign_type,
-            "sign_location": self.sign_location,
+            "sign_count": self.sign_count,
             "invitor_userid": self.invitor_userid,
             "invitor_name": self.invitor_name,
             "ip": self.ip,
@@ -393,6 +415,10 @@ class LiveViewer(BaseModel):
             department=sign_record.department if hasattr(sign_record, 'department') else None,
             is_signed=True,
             sign_time=sign_record.sign_time,
-            sign_type=sign_record.sign_type if hasattr(sign_record, 'sign_type') else "manual",
-            sign_location=sign_record.sign_location if hasattr(sign_record, 'sign_location') else None
+            sign_count=sign_record.sign_count if hasattr(sign_record, 'sign_count') else 1,
+            invitor_userid=sign_record.invitor_userid if hasattr(sign_record, 'invitor_userid') else None,
+            invitor_name=sign_record.invitor_name if hasattr(sign_record, 'invitor_name') else None,
+            ip=sign_record.ip if hasattr(sign_record, 'ip') else None,
+            location=sign_record.location if hasattr(sign_record, 'location') else None,
+            device_info=sign_record.device_info if hasattr(sign_record, 'device_info') else None
         ) 

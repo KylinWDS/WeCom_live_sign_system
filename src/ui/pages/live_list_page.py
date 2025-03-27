@@ -1038,49 +1038,117 @@ class LiveListPage(QWidget):
             
     @PerformanceManager.measure_operation("import_sign")
     def import_sign(self, live: Living):
-        """导入签到
-        
-        Args:
-            live: 直播信息
+        """
+        导入签到数据
+        :param live: 直播信息
         """
         try:
+            # 先在一个会话中执行检查
+            with self.db_manager.get_session() as session:
+                # 重新获取直播记录
+                live_record = session.query(Living).filter_by(livingid=live.livingid).first()
+                if not live_record:
+                    ErrorHandler.handle_warning("找不到直播记录", self, "错误")
+                    return
+                
+                # 添加调试日志
+                logger.info(f"找到直播记录：id={live_record.id}, livingid={live_record.livingid}")
+                
+                # 检查是否已拉取观看信息
+                if not live_record.is_viewer_fetched:
+                    ErrorHandler.handle_warning("请先拉取观看信息后再导入签到数据", self, "错误")
+                    return
+            
             # 显示文件选择对话框
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
                 "选择签到文件",
                 "",
-                "Excel Files (*.xlsx);;CSV Files (*.csv);;All Files (*)"
+                "Excel Files (*.xlsx *.xls);;CSV Files (*.csv);;All Files (*)"
             )
             
             if not file_path:
-                return
-                
-            # 显示IO对话框
-            dialog = IODialog("导入签到记录")
-            dialog.show()
+                return  # 用户取消了选择，直接返回
+            
+            # 使用进度对话框模式创建IO对话框
+            io_dialog = IODialog(parent=self, title="导入签到记录", is_progress_dialog=True)
+            io_dialog.add_info(f"正在导入签到数据，请稍候...")
+            io_dialog.add_info(f"选择的文件: {file_path}")
+            io_dialog.show()
             
             # 读取文件
-            if file_path.endswith('.xlsx'):
-                df = pd.read_excel(file_path)
+            if file_path.endswith('.xlsx') or file_path.endswith('.xls'):
+                try:
+                    df = pd.read_excel(file_path)
+                except Exception as e:
+                    io_dialog.add_error(f"读取Excel文件失败: {str(e)}")
+                    io_dialog.finish()  # 设置完成状态，但不关闭对话框
+                    io_dialog.exec()  # 使用exec()而不是show()，等待用户关闭
+                    return
             elif file_path.endswith('.csv'):
-                df = pd.read_csv(file_path)
+                try:
+                    df = pd.read_csv(file_path)
+                except Exception as e:
+                    io_dialog.add_error(f"读取CSV文件失败: {str(e)}")
+                    io_dialog.finish()
+                    io_dialog.exec()
+                    return
             else:
-                dialog.add_error("不支持的文件格式")
-                dialog.finish()
+                io_dialog.add_error("不支持的文件格式")
+                io_dialog.finish()
+                io_dialog.exec()
                 return
-                
-            # TODO: 实现签到导入逻辑
             
-            # 设置签到导入标志
-            with self.db_manager.get_session() as session:
-                # 查询并更新直播记录
-                living_record = session.query(Living).filter_by(id=live.id).first()
-                if living_record:
-                    living_record.is_sign_imported = 1
+            # 创建SignImportManager实例
+            from src.core.sign_import_manager import SignImportManager
+            
+            # 简化创建过程，移除不必要的企业信息获取
+            import_manager = SignImportManager(self.db_manager)
+            
+            success_count = 0
+            error_count = 0
+            skipped_count = 0
+            
+            try:
+                # 在一个会话中执行整个导入过程，以避免会话分离问题
+                with self.db_manager.get_session() as session:
+                    # 重新获取直播记录
+                    live_record = session.query(Living).filter_by(livingid=live.livingid).first()
+                    if not live_record:
+                        io_dialog.add_error("找不到直播记录")
+                        io_dialog.finish()
+                        io_dialog.exec()
+                        return
+                    
+                    # 导入签到数据，传递 live_record.id，确保它仍然与会话关联
+                    success_count, error_count, skipped_count = import_manager.import_sign_data(file_path, live_record.id)
+                    
+                    # 设置签到导入标志
+                    live_record.is_sign_imported = 1
                     session.commit()
+            except Exception as e:
+                io_dialog.add_error(f"导入过程中发生错误: {str(e)}")
+                io_dialog.finish()
+                io_dialog.exec()
+                return
             
-            dialog.add_success(f"成功导入 {len(df)} 条签到记录")
-            dialog.finish()
+            # 显示导入结果
+            io_dialog.add_info("导入过程完成")
+            if error_count > 0:
+                io_dialog.add_error(f"导入失败 {error_count} 条记录")
+            if skipped_count > 0:
+                io_dialog.add_warning(f"跳过 {skipped_count} 条重复记录")
+            if success_count > 0:
+                io_dialog.add_success(f"成功导入 {success_count} 条签到记录")
+            
+            # 完成导入过程，但不自动关闭对话框
+            io_dialog.finish()
+            
+            # 使用exec()方法显示对话框，并等待用户手动关闭
+            io_dialog.exec()
+            
+            # 刷新数据
+            self.load_data()
             
         except Exception as e:
             ErrorHandler.handle_error(e, self, "导入签到失败")

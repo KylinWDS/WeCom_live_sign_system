@@ -8,6 +8,7 @@ from .corporation import Corporation
 from .config_change import ConfigChange
 from .operation_log import OperationLog
 from .ip_record import IPRecord
+from .live_sign_record import LiveSignRecord
 
 __all__ = [
     "BaseModel",
@@ -23,5 +24,6 @@ __all__ = [
     "Corporation",
     "ConfigChange",
     "OperationLog",
-    "IPRecord"
+    "IPRecord",
+    "LiveSignRecord"
 ] 

@@ -87,23 +87,56 @@ class IODialog(BaseDialog):
     def _browse_file(self):
         """浏览文件"""
         if self.is_import:
-            file_path, _ = QFileDialog.getOpenFileName(
+            file_path, selected_filter = QFileDialog.getOpenFileName(
                 self,
                 "选择文件",
                 "",
-                "CSV文件 (*.csv);;Excel文件 (*.xlsx);;JSON文件 (*.json)"
+                "Excel文件 (*.xlsx *.xls);;CSV文件 (*.csv);;JSON文件 (*.json)"
             )
         else:
-            file_path, _ = QFileDialog.getSaveFileName(
+            file_path, selected_filter = QFileDialog.getSaveFileName(
                 self,
                 "保存文件",
                 "",
-                "CSV文件 (*.csv);;Excel文件 (*.xlsx);;JSON文件 (*.json)"
+                "Excel文件 (*.xlsx *.xls);;CSV文件 (*.csv);;JSON文件 (*.json)"
             )
             
         if file_path:
             self.file_edit.setText(file_path)
+            # 自动检测文件格式和编码
+            self.detect_file_format_and_encoding(file_path)
             
+    def detect_file_format_and_encoding(self, file_path):
+        """根据文件路径检测文件格式和编码"""
+        # 检测文件格式
+        if file_path.lower().endswith(('.xlsx', '.xls')):
+            self.format_combo.setCurrentText("Excel")
+        elif file_path.lower().endswith('.csv'):
+            self.format_combo.setCurrentText("CSV")
+        elif file_path.lower().endswith('.json'):
+            self.format_combo.setCurrentText("JSON")
+            
+        # 尝试检测文件编码（这里是简单示例，实际可能需要更复杂的检测）
+        try:
+            import chardet
+            with open(file_path, 'rb') as f:
+                result = chardet.detect(f.read(1024))
+                detected_encoding = result['encoding']
+                
+                # 设置编码选项
+                if detected_encoding and detected_encoding.lower() in ['utf-8', 'utf8']:
+                    self.encoding_check.setChecked(True)
+                else:
+                    self.encoding_check.setChecked(False)
+        except:
+            # 如果检测失败，保持默认设置
+            pass
+            
+    def set_file_path(self, file_path):
+        """设置文件路径并自动检测文件格式和编码"""
+        self.file_edit.setText(file_path)
+        self.detect_file_format_and_encoding(file_path)
+        
     def get_file_path(self) -> str:
         """获取文件路径"""
         return self.file_edit.text()

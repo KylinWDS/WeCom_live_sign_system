@@ -1,4 +1,5 @@
 # 测试相关
+# 注意：chardet>=5.0.0 已添加到 requirements.txt 中，用于文件编码检测
 pytest>=7.4.0
 pytest-qt>=4.3.0
 pytest-cov>=4.1.0
