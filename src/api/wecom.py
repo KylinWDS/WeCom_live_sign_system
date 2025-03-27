@@ -170,7 +170,7 @@ class WeComAPI:
         self.token_manager.log_stats()
         
     def create_live(self, anchor_userid: str, theme: str, living_start: int, 
-                   living_duration: int, type: int = 3, description: str = "") -> Dict[str, Any]:
+                   living_duration: int, type: int = 3, description: str = "", agentid = None) -> Dict[str, Any]:
         """创建直播
         
         Args:
@@ -180,11 +180,28 @@ class WeComAPI:
             living_duration: 直播时长(秒)
             type: 直播类型，默认3(企业培训)
             description: 直播描述
+            agentid: 企业微信应用ID，如果不传则使用当前企业应用ID
             
         Returns:
             Dict[str, Any]: 接口返回结果
         """
         try:
+            # 确定使用哪个应用ID，并确保是整数类型
+            if agentid is not None:
+                try:
+                    actual_agentid = int(agentid)
+                except (ValueError, TypeError):
+                    logger.warning(f"传入的agentid '{agentid}'不是有效的整数，使用默认值")
+                    actual_agentid = 1000002
+            elif hasattr(self, 'agent_id') and self.agent_id:
+                try:
+                    actual_agentid = int(self.agent_id)
+                except (ValueError, TypeError):
+                    logger.warning(f"实例的agent_id '{self.agent_id}'不是有效的整数，使用默认值")
+                    actual_agentid = 1000002
+            else:
+                actual_agentid = 1000002
+            
             data = {
                 "anchor_userid": anchor_userid,
                 "theme": theme,
@@ -192,7 +209,7 @@ class WeComAPI:
                 "living_duration": living_duration,
                 "type": type,
                 "description": description,
-                "agentid": self.agent_id
+                "agentid": actual_agentid
             }
             
             result = self._make_request("POST", "living/create", data=data)

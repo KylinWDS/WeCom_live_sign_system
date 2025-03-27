@@ -135,8 +135,8 @@ class HomePage(QWidget):
         with self.db_manager.get_session() as session:
             # 启用/禁用对应的按钮
             has_user_mgmt_perm = self.auth_manager.has_permission(self.user_id, "manage_users", session) if self.user_id else False
-            has_live_mgmt_perm = self.auth_manager.has_permission(self.user_id, "manage_lives", session) if self.user_id else False
-            has_stats_perm = self.auth_manager.has_permission(self.user_id, "view_statistics", session) if self.user_id else False
+            has_live_mgmt_perm = self.auth_manager.has_permission(self.user_id, "manage_live", session) if self.user_id else False
+            has_stats_perm = self.auth_manager.has_permission(self.user_id, "view_stats", session) if self.user_id else False
             
             # 用户管理
             self.live_booking_btn.setEnabled(has_live_mgmt_perm)
@@ -248,7 +248,7 @@ class HomePage(QWidget):
         # 使用临时会话检查权限
         with self.db_manager.get_session() as session:
             # 根据用户权限创建快捷操作按钮
-            has_live_mgmt_perm = self.auth_manager.has_permission(self.user_id, "manage_lives", session) if self.user_id else False
+            has_live_mgmt_perm = self.auth_manager.has_permission(self.user_id, "manage_live", session) if self.user_id else False
             has_user_mgmt_perm = self.auth_manager.has_permission(self.user_id, "manage_users", session) if self.user_id else False
             
             # 添加快速创建直播按钮
@@ -264,7 +264,7 @@ class HomePage(QWidget):
             stats_btn = self.create_action_button(
                 "查看统计",
                 "fas.chart-line",
-                lambda: self.content_stack.setCurrentWidget(self.stats_page)
+                lambda: self.show_stats_page()
             )
             buttons_layout.addWidget(stats_btn)
             
@@ -420,13 +420,8 @@ class HomePage(QWidget):
     def show_live_list(self):
         """显示直播列表页面"""
         # 检查权限
-        if not self.check_permission("view_live"):
+        if not self.check_permission("manage_live"):
             QMessageBox.warning(self, "警告", "您没有权限访问此功能")
-            return
-            
-        # 检查task_manager是否可用
-        if self.task_manager is None:
-            QMessageBox.warning(self, "警告", "任务管理器未初始化，无法使用此功能")
             return
         
         # 检查是否已经打开了该页面
@@ -437,8 +432,10 @@ class HomePage(QWidget):
             
         # 创建页面
         page = LiveListPage(
-            self.wecom_api,
-            self.task_manager
+            self.db_manager,    # 数据库管理器
+            self.wecom_api,     # 企业微信API
+            auth_manager=self.auth_manager,  # 授权管理器
+            user_id=self.user_id  # 用户ID
         )
         index = self.content_stack.addTab(page, "直播列表")
         self.content_stack.setCurrentIndex(index)
@@ -467,14 +464,19 @@ class HomePage(QWidget):
         
     def show_stats_page(self):
         """显示数据统计页面"""
-        # 检查是否已有相同标签
+        # 检查用户权限
+        if not self.check_permission("view_stats"):
+            ErrorHandler.handle_warning("您没有查看统计信息的权限", self, "权限错误")
+            return
+        
+        # 查找是否已经打开了统计页面
         for i in range(self.content_stack.count()):
-            if self.content_stack.tabText(i) == "数据统计":
+            if "statsPage" in self.content_stack.widget(i).objectName():
                 self.content_stack.setCurrentIndex(i)
                 return
         
-        # 创建数据统计页面
-        stats_page = StatsPage(self.db_manager)
+        # 创建统计页面并添加到标签页
+        stats_page = StatsPage(self.db_manager, self.auth_manager)
         self.content_stack.addTab(stats_page, "数据统计")
         self.content_stack.setCurrentWidget(stats_page)
     
@@ -612,3 +614,11 @@ class HomePage(QWidget):
             button.clicked.connect(on_click)
             
         return button
+
+    def switchToLiveList(self):
+        """切换到直播列表页面(用于从其他页面导航)"""
+        try:
+            logger.info("请求切换到直播列表页面")
+            self.show_live_list()
+        except Exception as e:
+            logger.error(f"切换到直播列表页面时出错: {str(e)}")

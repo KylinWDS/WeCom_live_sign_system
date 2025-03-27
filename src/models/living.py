@@ -2,7 +2,7 @@ from sqlalchemy import Column, String, Integer, DateTime, Text, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from .base import BaseModel
 import enum
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from .sign_record import SignRecord
 
@@ -50,21 +50,37 @@ class Living(BaseModel):
 
     def __init__(
         self,
-        id: int,
-        name: str,
-        start_time: str,
-        end_time: str,
-        status: str,
-        created_at: str,
-        updated_at: str
+        livingid: str,
+        theme: str,
+        living_start: datetime,
+        living_duration: int,
+        anchor_userid: str,
+        description: Optional[str] = None,
+        status: LivingStatus = LivingStatus.RESERVED,
+        type: LivingType = LivingType.GENERAL,
+        corpname: str = "",
+        agentid: str = "",
+        viewer_num: int = 0,
+        comment_num: int = 0,
+        mic_num: int = 0,
+        online_count: int = 0,
+        subscribe_count: int = 0
     ):
-        self.id = id
-        self.name = name
-        self.start_time = start_time
-        self.end_time = end_time
+        self.livingid = livingid
+        self.theme = theme
+        self.living_start = living_start
+        self.living_duration = living_duration
+        self.anchor_userid = anchor_userid
+        self.description = description
         self.status = status
-        self.created_at = created_at
-        self.updated_at = updated_at
+        self.type = type
+        self.corpname = corpname
+        self.agentid = agentid
+        self.viewer_num = viewer_num
+        self.comment_num = comment_num
+        self.mic_num = mic_num
+        self.online_count = online_count
+        self.subscribe_count = subscribe_count
     
     def is_active(self) -> bool:
         """检查直播是否正在进行中
@@ -72,8 +88,9 @@ class Living(BaseModel):
         Returns:
             bool: 是否正在进行中
         """
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        return self.start_time <= now <= self.end_time
+        now = datetime.now()
+        end_time = self.living_start + timedelta(seconds=self.living_duration)
+        return self.living_start <= now <= end_time
     
     def is_ended(self) -> bool:
         """检查直播是否已结束
@@ -81,8 +98,9 @@ class Living(BaseModel):
         Returns:
             bool: 是否已结束
         """
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        return now > self.end_time
+        now = datetime.now()
+        end_time = self.living_start + timedelta(seconds=self.living_duration)
+        return now > end_time
     
     def get_duration(self) -> int:
         """获取直播时长（分钟）
@@ -90,20 +108,27 @@ class Living(BaseModel):
         Returns:
             int: 直播时长
         """
-        start = datetime.strptime(self.start_time, "%Y-%m-%d %H:%M:%S")
-        end = datetime.strptime(self.end_time, "%Y-%m-%d %H:%M:%S")
-        return int((end - start).total_seconds() / 60)
+        # 直接使用living_duration（以秒为单位）并转换为分钟
+        return int(self.living_duration / 60)
     
     def to_dict(self) -> dict:
         """转换为字典"""
         return {
-            "id": self.id,
-            "name": self.name,
-            "start_time": self.start_time,
-            "end_time": self.end_time,
+            "livingid": self.livingid,
+            "theme": self.theme,
+            "living_start": self.living_start,
+            "living_duration": self.living_duration,
+            "anchor_userid": self.anchor_userid,
+            "description": self.description,
             "status": self.status,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at
+            "type": self.type,
+            "corpname": self.corpname,
+            "agentid": self.agentid,
+            "viewer_num": self.viewer_num,
+            "comment_num": self.comment_num,
+            "mic_num": self.mic_num,
+            "online_count": self.online_count,
+            "subscribe_count": self.subscribe_count
         }
 
 class WatchStat(BaseModel):

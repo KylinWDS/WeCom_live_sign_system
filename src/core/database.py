@@ -1,7 +1,7 @@
 import sqlite3
 import os
 import shutil
-from sqlalchemy import create_engine, func
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker, scoped_session, Session
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.exc import SQLAlchemyError
@@ -119,9 +119,15 @@ class DatabaseManager:
                 echo=self.db_config.get("echo", False)
             )
             
-            # 创建会话工厂
+            # 创建会话工厂 - 兼容SQLAlchemy 2.0的方式
             logger.info("创建会话工厂...")
-            self.Session = sessionmaker(bind=self.engine)
+            self.Session = sessionmaker(
+                autocommit=False,
+                autoflush=True,
+                expire_on_commit=True,
+                class_=Session,
+                bind=self.engine
+            )
             
             # 标记为已初始化
             self.initialized = True
@@ -266,6 +272,12 @@ class DatabaseManager:
             raise RuntimeError("数据库未初始化")
             
         session = self.Session()
+        
+        # 为Session添加query方法以兼容SQLAlchemy 1.x API
+        if not hasattr(session, 'query'):
+            from sqlalchemy.orm import Query
+            # 正确实现：将entities中的元素展开后传递给Query
+            session.query = lambda *entities, **kwargs: Query(entities[0] if len(entities) == 1 else entities, session=session)
         
         # 增加活跃会话计数
         with self._session_lock:
@@ -737,3 +749,60 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"执行SQL查询失败: {str(e)}")
             raise
+    
+    def get_agent_id_by_user(self, user_id: str) -> int:
+        """根据用户ID获取对应的企业微信应用ID
+        
+        Args:
+            user_id: 用户ID，应该是login_name
+            
+        Returns:
+            int: 企业微信应用ID，如果获取失败则返回默认值
+        """
+        try:
+            with self.get_session() as session:
+                # 使用login_name查找用户
+                from src.models.user import User
+                user = session.query(User).filter_by(login_name=user_id).first()
+                
+                # 如果找到了用户，且用户有agentid
+                if user and user.agentid:
+                    try:
+                        return int(user.agentid)
+                    except (ValueError, TypeError):
+                        logger.warning(f"用户 {user_id} 的agentid '{user.agentid}'不是有效的整数")
+                
+                # 如果找到了用户，且用户有corpid，则尝试获取对应企业的agentid
+                if user and user.corpid:
+                    from src.models.corporation import Corporation
+                    corp = session.query(Corporation).filter_by(corp_id=user.corpid).first()
+                    if corp and corp.agent_id:
+                        try:
+                            return int(corp.agent_id)
+                        except (ValueError, TypeError):
+                            logger.warning(f"企业 {user.corpid} 的agent_id '{corp.agent_id}'不是有效的整数")
+                
+                # 如果找到了用户，且用户有corpname，则尝试获取对应企业的agentid
+                if user and user.corpname:
+                    from src.models.corporation import Corporation
+                    corp = session.query(Corporation).filter_by(name=user.corpname).first()
+                    if corp and corp.agent_id:
+                        try:
+                            return int(corp.agent_id)
+                        except (ValueError, TypeError):
+                            logger.warning(f"企业 {user.corpname} 的agent_id '{corp.agent_id}'不是有效的整数")
+                
+                # 如果以上方法都失败，则获取当前激活的企业的agentid
+                from src.models.corporation import Corporation
+                corp = session.query(Corporation).filter_by(status=1).first()
+                if corp and corp.agent_id:
+                    try:
+                        return int(corp.agent_id)
+                    except (ValueError, TypeError):
+                        logger.warning(f"当前激活企业的agent_id '{corp.agent_id}'不是有效的整数")
+                
+                # 如果所有方法都失败，返回默认值
+                return 1000002  # 默认企业微信应用ID
+        except Exception as e:
+            logger.error(f"获取用户对应的企业微信应用ID失败: {str(e)}")
+            return 1000002  # 出错时返回默认ID

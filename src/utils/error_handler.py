@@ -233,6 +233,11 @@ class ErrorHandler(QObject):
         # 记录错误
         logger.error(f"{title}: {error_message}\n{traceback_str}")
         
+        # 检查parent参数类型，确保是QWidget或None
+        if parent is not None and not isinstance(parent, QWidget):
+            logger.warning(f"handle_error接收到非QWidget的parent参数: {type(parent)}")
+            parent = None  # 将非法parent设为None
+        
         # 显示错误对话框
         if parent:
             QMessageBox.critical(parent, title, error_message)
@@ -249,6 +254,11 @@ class ErrorHandler(QObject):
         """
         # 记录警告
         logger.warning(f"{title}: {message}")
+        
+        # 检查parent参数类型，确保是QWidget或None
+        if parent is not None and not isinstance(parent, QWidget):
+            logger.warning(f"handle_warning接收到非QWidget的parent参数: {type(parent)}")
+            parent = None  # 将非法parent设为None
         
         # 显示警告对话框
         if parent:
@@ -267,6 +277,11 @@ class ErrorHandler(QObject):
         # 记录信息
         logger.info(f"{title}: {message}")
         
+        # 检查parent参数类型，确保是QWidget或None
+        if parent is not None and not isinstance(parent, QWidget):
+            logger.warning(f"handle_info接收到非QWidget的parent参数: {type(parent)}")
+            parent = None  # 将非法parent设为None
+        
         # 显示信息对话框
         if parent:
             QMessageBox.information(parent, title, message)
@@ -284,6 +299,11 @@ class ErrorHandler(QObject):
         Returns:
             bool: 是否确认
         """
+        # 检查parent参数类型，确保是QWidget或None
+        if parent is not None and not isinstance(parent, QWidget):
+            logger.warning(f"handle_question接收到非QWidget的parent参数: {type(parent)}")
+            parent = None  # 将非法parent设为None
+        
         # 显示问题对话框
         if parent:
             reply = QMessageBox.question(
@@ -512,7 +532,7 @@ class ErrorHandler(QObject):
 请在企业微信后台配置可信任IP：
 1. 访问 https://work.weixin.qq.com/wework_admin/frame#apps/modApiApp
 2. 选择对应的应用
-3. 在"开发者接口"部分找到"IP白名单"
+3. 在"开发者接口"部分找到"企业可信IP"
 4. 添加上述IP地址
 
 配置完成后，请等待5分钟后再试。
@@ -548,7 +568,7 @@ https://work.weixin.qq.com/wework_admin/frame#apps/modApiApp
         copy_btn = dialog.addButton("复制IP", QMessageBox.ButtonRole.ActionRole)
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(ip if ip else ""))
         
-        open_btn = dialog.addButton("配置说明", QMessageBox.ButtonRole.ActionRole)
+        open_btn = dialog.addButton("去配置>>", QMessageBox.ButtonRole.ActionRole)
         open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://work.weixin.qq.com/wework_admin/frame#apps/modApiApp")))
         
         # 修改按钮名称

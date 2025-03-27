@@ -610,7 +610,7 @@ class SettingsPage(QWidget):
         try:
             # 确保配置目录存在
             import os
-            config_dir = os.path.dirname(self.config_manager.config_path)
+            config_dir = os.path.dirname(self.config_manager.config_dir)
             if not os.path.exists(config_dir):
                 os.makedirs(config_dir, exist_ok=True)
             

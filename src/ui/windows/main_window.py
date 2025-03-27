@@ -247,6 +247,17 @@ class MainWindow(QMainWindow):
             logger.error(f"检查权限失败: {str(e)}")
             return False
 
+    def switchToLiveList(self):
+        """切换到直播列表页面"""
+        try:
+            # 如果HomePage有切换到直播列表的方法，则调用它
+            if hasattr(self.home_page, 'switchToLiveList'):
+                self.home_page.switchToLiveList()
+            else:
+                logger.warning("主页未实现切换到直播列表的方法")
+        except Exception as e:
+            logger.error(f"切换到直播列表页面时出错: {str(e)}")
+
     def closeEvent(self, event):
         """窗口关闭时的处理"""
         # 清理资源，但不再需要关闭会话

@@ -1,12 +1,14 @@
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional, Callable
 import threading
 import time
+import logging
 from datetime import datetime, timedelta
 from src.utils.logger import get_logger
 from src.api.wecom import WeComAPI
 from src.core.database import DatabaseManager
+from src.models.live_booking import LiveBooking
 
-logger = get_logger(__name__)
+logger = logging.getLogger("app.task_manager")
 
 class TaskManager:
     """任务管理器"""

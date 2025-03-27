@@ -18,7 +18,7 @@
 4.7.制作首页登入按钮，用户填写信息完全，或者选择信息完全后，可点击登入按钮进入系统，可在登入系统按钮触发的时候进行接口企业微信调用测试是否允许，可以测试出来如上的企业微信自建应用可信任IP是否需要重新填写，可以提示用户进行全量填写，并提示用户可以5分钟之后再次尝试登入
 5.该系统所有方位企业微信接口位置都需要进行token的拉取，所以一开始就要记录好拉取的token，并后续每个接口访问都要前置token拉取，拉取token接口如下：
 curl --location --request GET 'https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=ww098b22d822db00d7&corpsecret=gbKNpjiNwkNjyP53QCe6VnzIJUFFRokeVZ5xe6x707I&debug=1'
-6.登入系统后，默认进入左侧第1个菜单，创建预约直播：
+6.登入系统后，左侧第1个菜单，创建预约直播：
 6.1.官方文档地址为【https://developer.work.weixin.qq.com/document/path/96837】
 6.2.接口调用示例如下：
 curl --location --request POST 'https://qyapi.weixin.qq.com/cgi-bin/living/create?access_token=nludLAAJZKA3idMG0W9Y0AJK0lRVWq9P6ty1a-6nv58IWZP7BAgczO9BTyMLZYUqVhbiTrfGWB9q-m0XjDMeaMJoAKLkLtiNoyvY-kKBDKraSn45kjhWDMcFztZvKksGzjfGzltg852TGNPQH3K7CtQBKNo-yryQ550VfdR5DhOeRvrHDXL-a4PzqeGWl59pZBbnrOX6pB3RHdNOD9sskw' \

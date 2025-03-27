@@ -97,23 +97,30 @@ class SignRecord(BaseModel):
         """
         try:
             from src.core.database import DatabaseManager
-            db = DatabaseManager.get_db()
+            # 修复数据库连接获取方式
+            db_manager = DatabaseManager()  # 直接创建实例
             
-            # 获取最早的签到时间
-            first_sign = db.query(cls).filter_by(living_id=live_booking_id).order_by(cls.sign_time.asc()).first()
-            sign_time = first_sign.sign_time if first_sign else None
-            
-            # 获取签到人数
-            sign_count = db.query(func.count(cls.id)).filter_by(living_id=live_booking_id).scalar()
+            with db_manager.get_session() as session:
+                # 获取最早的签到时间
+                first_sign = session.query(cls).filter_by(living_id=live_booking_id).order_by(cls.sign_time.asc()).first()
+                sign_time = first_sign.sign_time if first_sign else None
+                
+                # 获取签到人数
+                sign_count = session.query(func.count(cls.id)).filter_by(living_id=live_booking_id).scalar()
+                
+                # 获取去重后的签到人员数量
+                unique_signers = session.query(func.count(func.distinct(cls.name))).filter_by(living_id=live_booking_id).scalar()
             
             return {
                 "sign_time": sign_time.strftime("%Y.%m.%d %H:%M") if sign_time else None,
-                "sign_count": sign_count
+                "sign_count": sign_count,  # 总签到次数
+                "unique_signers": unique_signers  # 不同的签到人数
             }
             
         except Exception as e:
             logger.error(f"获取签到统计信息失败: {str(e)}")
             return {
                 "sign_time": None,
-                "sign_count": 0
+                "sign_count": 0,
+                "unique_signers": 0
             } 
