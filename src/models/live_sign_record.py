@@ -21,6 +21,7 @@ class LiveSignRecord(BaseModel):
     is_valid = Column(Boolean, default=True, comment="签到是否有效")
     sign_sequence = Column(Integer, default=1, comment="第几次签到，对应导入签到文件的sheet顺序")
     sheet_name = Column(String(100), nullable=True, comment="签到sheet页名称，对应导入时的sheet页名称")
+    original_member_name = Column(String(200), nullable=True, comment="Excel表中的原始成员名称")
     
     # 关联到LiveViewer
     viewer = relationship("LiveViewer", back_populates="sign_records")
@@ -35,7 +36,8 @@ class LiveSignRecord(BaseModel):
         sign_remark: Optional[str] = None,
         is_valid: bool = True,
         sign_sequence: int = 1,
-        sheet_name: Optional[str] = None
+        sheet_name: Optional[str] = None,
+        original_member_name: Optional[str] = None
     ):
         self.viewer_id = viewer_id
         self.sign_time = sign_time
@@ -46,6 +48,7 @@ class LiveSignRecord(BaseModel):
         self.is_valid = is_valid
         self.sign_sequence = sign_sequence
         self.sheet_name = sheet_name
+        self.original_member_name = original_member_name
     
     def to_dict(self) -> dict:
         """转换为字典"""
@@ -60,6 +63,7 @@ class LiveSignRecord(BaseModel):
             "is_valid": self.is_valid,
             "sign_sequence": self.sign_sequence,
             "sheet_name": self.sheet_name,
+            "original_member_name": self.original_member_name,
             "create_time": self.create_time,
             "update_time": self.update_time
         } 

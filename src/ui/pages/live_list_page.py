@@ -1105,10 +1105,6 @@ class LiveListPage(QWidget):
             # 简化创建过程，移除不必要的企业信息获取
             import_manager = SignImportManager(self.db_manager)
             
-            success_count = 0
-            error_count = 0
-            skipped_count = 0
-            
             try:
                 # 在一个会话中执行整个导入过程，以避免会话分离问题
                 with self.db_manager.get_session() as session:
@@ -1120,26 +1116,80 @@ class LiveListPage(QWidget):
                         io_dialog.exec()
                         return
                     
+                    # 添加进度信息
+                    io_dialog.add_info(f"开始导入直播 \"{live_record.theme}\" 的签到数据...")
+                    io_dialog.add_info(f"直播ID: {live_record.livingid}")
+                    io_dialog.add_info(f"直播时间: {live_record.living_start}")
+                    
                     # 导入签到数据，传递 live_record.id，确保它仍然与会话关联
-                    success_count, error_count, skipped_count = import_manager.import_sign_data(file_path, live_record.id)
+                    import_results = import_manager.import_sign_data(file_path, live_record.id)
+                    
+                    # 解析导入结果
+                    success_count = import_results.get('success_count', 0)
+                    error_count = import_results.get('error_count', 0)
+                    skipped_count = import_results.get('skipped_count', 0)
+                    success_details = import_results.get('success_details', [])
+                    error_details = import_results.get('error_details', [])
+                    skipped_details = import_results.get('skipped_details', [])
                     
                     # 设置签到导入标志
                     live_record.is_sign_imported = 1
                     session.commit()
             except Exception as e:
                 io_dialog.add_error(f"导入过程中发生错误: {str(e)}")
+                import traceback
+                io_dialog.add_error(f"错误详情: {traceback.format_exc()}")
                 io_dialog.finish()
                 io_dialog.exec()
                 return
             
             # 显示导入结果
-            io_dialog.add_info("导入过程完成")
-            if error_count > 0:
-                io_dialog.add_error(f"导入失败 {error_count} 条记录")
-            if skipped_count > 0:
-                io_dialog.add_warning(f"跳过 {skipped_count} 条重复记录")
+            io_dialog.add_info("\n===== 导入过程完成 =====")
+            
+            # 显示成功记录
             if success_count > 0:
-                io_dialog.add_success(f"成功导入 {success_count} 条签到记录")
+                io_dialog.add_success(f"✓ 成功导入 {success_count} 条签到记录")
+                # 显示成功详情（限制显示数量以避免过多）
+                max_success_details = 10
+                if success_details:
+                    io_dialog.add_info(f"成功详情（显示前{min(len(success_details), max_success_details)}条，共{len(success_details)}条）:")
+                    for detail in success_details[:max_success_details]:
+                        io_dialog.add_success(f"  ✓ {detail}")
+                    if len(success_details) > max_success_details:
+                        io_dialog.add_info(f"  ... 还有 {len(success_details) - max_success_details} 条成功记录未显示")
+            else:
+                io_dialog.add_warning("没有成功导入的记录")
+            
+            # 显示跳过记录
+            if skipped_count > 0:
+                io_dialog.add_warning(f"⚠ 跳过 {skipped_count} 条重复记录")
+                # 显示跳过详情
+                if skipped_details:
+                    max_skipped_details = 10
+                    io_dialog.add_warning(f"跳过详情（显示前{min(len(skipped_details), max_skipped_details)}条，共{len(skipped_details)}条）:")
+                    for detail in skipped_details[:max_skipped_details]:
+                        io_dialog.add_warning(f"  ⚠ {detail}")
+                    if len(skipped_details) > max_skipped_details:
+                        io_dialog.add_warning(f"  ... 还有 {len(skipped_details) - max_skipped_details} 条跳过记录未显示")
+            
+            # 显示错误记录
+            if error_count > 0:
+                io_dialog.add_error(f"✗ 导入失败 {error_count} 条记录")
+                # 显示错误详情
+                if error_details:
+                    max_error_details = 10
+                    io_dialog.add_error(f"错误详情（显示前{min(len(error_details), max_error_details)}条，共{len(error_details)}条）:")
+                    for detail in error_details[:max_error_details]:
+                        io_dialog.add_error(f"  ✗ {detail}")
+                    if len(error_details) > max_error_details:
+                        io_dialog.add_error(f"  ... 还有 {len(error_details) - max_error_details} 条错误记录未显示")
+            
+            # 添加总结信息
+            io_dialog.add_info("\n===== 导入结果总结 =====")
+            io_dialog.add_info(f"总处理记录: {success_count + error_count + skipped_count}")
+            io_dialog.add_success(f"成功导入: {success_count}")
+            io_dialog.add_warning(f"跳过记录: {skipped_count}")
+            io_dialog.add_error(f"导入失败: {error_count}")
             
             # 完成导入过程，但不自动关闭对话框
             io_dialog.finish()
