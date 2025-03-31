@@ -30,6 +30,11 @@ import os
 from typing import List, Optional, Dict, Any
 from sqlalchemy import select, func, and_, or_, cast, String
 from src.core.live_viewer_manager import LiveViewerManager
+import concurrent.futures
+from threading import Lock
+from copy import deepcopy
+from collections import defaultdict
+from src.models.live_reward_record import LiveRewardRecord, RewardRuleType
 
 logger = get_logger(__name__)
 
@@ -1856,11 +1861,15 @@ class LiveViewerDetailPage(QDialog):
         # 观看开始时间
         filter_row2.addWidget(QLabel("观看开始时间:"))
         self.watch_start_time_filter = CustomDateTimeWidget()
+        current_time = QDateTime.currentDateTime()
+        one_month_ago = current_time.addMonths(-1)
+        self.watch_start_time_filter.setDateTime(one_month_ago)  # 默认为一个月前
         filter_row2.addWidget(self.watch_start_time_filter)
         
         filter_row2.addWidget(QLabel("至"))
         
         self.watch_end_time_filter = CustomDateTimeWidget()
+        self.watch_end_time_filter.setDateTime(current_time)  # 默认为当前时间
         filter_row2.addWidget(self.watch_end_time_filter)
         
         # 将筛选按钮更名为搜索
@@ -1913,7 +1922,7 @@ class LiveViewerDetailPage(QDialog):
         
         # 基础列宽设置 - 增加列宽以适应筛选图标
         column_widths = [140, 100, 120, 100, 100, 120, 100, 100, 100, 170, 100, 
-                        100, 120, 100, 160, 100, 100, 140, 120, 140]
+                        100, 120, 100, 160, 100, 100, 120, 140, 120, 140]
         for i, width in enumerate(column_widths):
             if i < len(column_widths):
                 self.table.setColumnWidth(i, width)
@@ -1922,18 +1931,9 @@ class LiveViewerDetailPage(QDialog):
         self.table.setColumnWidth(0, 160)  # 操作列
         self.table.setColumnWidth(9, 190)  # 最后签到时间
         self.table.setColumnWidth(14, 160)  # 位置信息
+        self.table.setColumnWidth(17, 120)  # 奖励状态
         
         main_layout.addWidget(self.table)
-        
-        # 添加一行测试按钮
-        test_layout = QHBoxLayout()
-        test_btn = QPushButton("测试筛选功能")
-        test_btn.clicked.connect(self.test_filters)
-        test_layout.addWidget(test_btn)
-        
-        debug_label = QLabel("点击上方按钮测试筛选功能")
-        test_layout.addWidget(debug_label)
-        main_layout.addLayout(test_layout)
         
         # 4. 分页控件
         pagination_layout = QHBoxLayout()
@@ -2012,7 +2012,8 @@ class LiveViewerDetailPage(QDialog):
                     LiveViewer.is_invited_by_anchor,
                     func.coalesce(cast(LiveViewer.location, String), '').label('location_info'),
                     LiveViewer.is_reward_eligible,
-                    LiveViewer.reward_amount
+                    LiveViewer.reward_amount,
+                    LiveViewer.reward_status  # 添加奖励状态字段
                 ).filter(LiveViewer.living_id == self.live_info.id)
                 
                 # 应用姓名过滤
@@ -2120,7 +2121,7 @@ class LiveViewerDetailPage(QDialog):
                             original_member_names[record.viewer_id] = record.original_member_name
                 
                 # 动态设置表格列数和表头
-                base_columns = 20  # 基础列数改为20（合并操作列）
+                base_columns = 21  # 基础列数改为21（增加奖励状态列）
                 total_columns = base_columns + max_sign_count
                 self.table.setColumnCount(total_columns)
                 
@@ -2128,7 +2129,7 @@ class LiveViewerDetailPage(QDialog):
                 headers = [
                     "操作", "用户ID", "姓名", "用户来源", "用户类型", 
                     "观看时长(分钟)", "是否评论", "是否连麦", "有无签到", "最后签到时间", "签到次数", 
-                    "邀请人ID", "邀请人姓名", "主播邀请", "位置信息", "符合奖励", "奖励金额", 
+                    "邀请人ID", "邀请人姓名", "主播邀请", "位置信息", "符合奖励", "奖励金额", "奖励状态",
                     "原始名称", "部门ID", "部门"
                 ]
                 
@@ -2218,13 +2219,16 @@ class LiveViewerDetailPage(QDialog):
                     self.table.setItem(row, 15, QTableWidgetItem("是" if viewer.is_reward_eligible else "否"))
                     self.table.setItem(row, 16, QTableWidgetItem(str(viewer.reward_amount or 0)))
                     
+                    # 奖励状态
+                    self.table.setItem(row, 17, QTableWidgetItem(viewer.reward_status or "未设置"))
+                    
                     # 原始成员名称
                     original_name = original_member_names.get(viewer.id, "")
-                    self.table.setItem(row, 17, QTableWidgetItem(original_name))
+                    self.table.setItem(row, 18, QTableWidgetItem(original_name))
                     
                     # 部门ID和部门移到最后
-                    self.table.setItem(row, 18, QTableWidgetItem(viewer.department_id or ""))
-                    self.table.setItem(row, 19, QTableWidgetItem(viewer.department or ""))
+                    self.table.setItem(row, 19, QTableWidgetItem(viewer.department_id or ""))
+                    self.table.setItem(row, 20, QTableWidgetItem(viewer.department or ""))
                     
                     # 填充签到记录
                     viewer_records = sign_records.get(viewer.id, [])
@@ -2267,7 +2271,10 @@ class LiveViewerDetailPage(QDialog):
                 detail_text += f"部门: {viewer.department or '未知'}\n"
                 detail_text += f"观看时长: {int((viewer.watch_time or 0) / 60)}分钟\n"
                 detail_text += f"签到状态: {'已签到' if viewer.is_signed else '未签到'}\n"
-                detail_text += f"签到次数: {viewer.sign_count or 0}\n\n"
+                detail_text += f"签到次数: {viewer.sign_count or 0}\n"
+                detail_text += f"奖励资格: {'符合' if viewer.is_reward_eligible else '不符合'}\n"
+                detail_text += f"奖励金额: {viewer.reward_amount or 0}\n"
+                detail_text += f"奖励状态: {viewer.reward_status or '未设置'}\n\n"
                 
                 if records:
                     detail_text += "签到记录:\n"
@@ -2318,8 +2325,24 @@ class LiveViewerDetailPage(QDialog):
         self.watch_time_filter.setCurrentIndex(0)  # "全部"
         
         # 重置日期时间
-        self.watch_start_time_filter.clearDateTime()
-        self.watch_end_time_filter.clearDateTime()
+        current_time = QDateTime.currentDateTime()
+        one_month_ago = current_time.addMonths(-1)
+        self.watch_start_time_filter.setDateTime(one_month_ago)
+        self.watch_end_time_filter.setDateTime(current_time)
+        
+        # 清除表头筛选条件
+        header = self.table.horizontalHeader()
+        if isinstance(header, FilterHeader):
+            # 先保存所有列索引
+            columns_to_clear = list(header.filters.keys()) + list(header.custom_filters.keys())
+            # 清除每一列的筛选条件
+            for col in columns_to_clear:
+                header.clearFilters(col)
+            # 清空筛选列记录
+            header.filtered_columns.clear()
+            # 显示所有行
+            for row in range(self.table.rowCount()):
+                self.table.setRowHidden(row, False)
         
         self.current_page = 1  # 重置为第一页
         self.load_data()
@@ -2417,26 +2440,6 @@ class LiveViewerDetailPage(QDialog):
         except Exception as e:
             ErrorHandler.handle_error(e, self, "查看签到记录失败")
     
-    def test_filters(self):
-        """测试筛选功能"""
-        # 获取表头
-        header = self.table.horizontalHeader()
-        if isinstance(header, FilterHeader):
-            # 模拟点击第二列的筛选图标
-            section_pos = header.sectionPosition(1)
-            section_size = header.sectionSize(1)
-            
-            # 获取筛选图标的大致位置
-            icon_x = section_pos + section_size - header.filter_icon_size - header.filter_icon_margin - 10
-            icon_y = header.height() // 2
-            
-            print(f"模拟点击筛选图标 - 位置: {icon_x}, {icon_y}, 列: 1")
-            
-            # 直接调用显示筛选菜单方法
-            header.showFilterMenu(1)
-        else:
-            print("表头不是FilterHeader类型")
-    
     def export_data(self):
         """导出数据到Excel"""
         try:
@@ -2494,7 +2497,8 @@ class LiveViewerDetailPage(QDialog):
                     LiveViewer.is_invited_by_anchor,
                     func.coalesce(cast(LiveViewer.location, String), '').label('location_info'),
                     LiveViewer.is_reward_eligible,
-                    LiveViewer.reward_amount
+                    LiveViewer.reward_amount,
+                    LiveViewer.reward_status  # 添加奖励状态字段
                 ).filter(LiveViewer.living_id == self.live_info.id)
                 
                 progress.setValue(10)
@@ -2603,6 +2607,7 @@ class LiveViewerDetailPage(QDialog):
                         "位置信息": viewer.location_info or "",
                         "符合奖励": "是" if viewer.is_reward_eligible else "否",
                         "奖励金额": viewer.reward_amount or 0,
+                        "奖励状态": viewer.reward_status or "未设置",
                         "原始名称": original_member_names.get(viewer.id, "")
                     }
                     
@@ -2906,6 +2911,13 @@ class FilterHeader(QHeaderView):
     
     def applyFilter(self, columnIndex, values):
         """应用特定列的筛选"""
+        table = self.parent()
+        
+        # 如果是空列表，表示取消筛选，先显示所有行
+        if not values:
+            for row in range(table.rowCount()):
+                table.setRowHidden(row, False)
+        
         # 清除该列的自定义筛选
         if columnIndex in self.custom_filters:
             del self.custom_filters[columnIndex]
@@ -2920,14 +2932,29 @@ class FilterHeader(QHeaderView):
             
         self.applyFilters()
         
-        # 重新加载数据
-        self.reloadData()
+        # 如果取消筛选，重新加载所有数据确保UI刷新
+        if not values:
+            parent = self.parent()
+            while parent:
+                if isinstance(parent, LiveViewerDetailPage):
+                    QTimer.singleShot(100, parent.load_data)
+                    break
+                parent = parent.parent()
+        else:
+            # 有筛选条件则只更新现有显示
+            self.reloadData()
         
         # 重绘表头，显示筛选状态
         self.viewport().update()
     
     def clearFilters(self, columnIndex):
         """清除特定列的所有筛选"""
+        table = self.parent()
+        
+        # 先显示所有行，以确保过滤条件解除后显示所有数据
+        for row in range(table.rowCount()):
+            table.setRowHidden(row, False)
+            
         if columnIndex in self.filters:
             del self.filters[columnIndex]
         if columnIndex in self.custom_filters:
@@ -2936,10 +2963,16 @@ class FilterHeader(QHeaderView):
         # 移除筛选状态标记
         self.filtered_columns.discard(columnIndex)
         
+        # 重新应用其他列的筛选条件
         self.applyFilters()
         
-        # 重新加载数据
-        self.reloadData()
+        # 重新加载数据 - 取消注释，让其重新加载所有数据
+        parent = self.parent()
+        while parent:
+            if isinstance(parent, LiveViewerDetailPage):
+                QTimer.singleShot(100, parent.load_data)
+                break
+            parent = parent.parent()
         
         # 重绘表头，显示筛选状态
         self.viewport().update()
@@ -2966,13 +2999,17 @@ class FilterHeader(QHeaderView):
     
     def reloadData(self):
         """重新加载数据"""
+        # 检查筛选状态
+        has_filters = bool(self.filters) or bool(self.custom_filters)
+        
         # 查找包含此表头的窗口
         parent = self.parent()
         while parent:
             # 如果父窗口是LiveViewerDetailPage，则重新加载数据
             if isinstance(parent, LiveViewerDetailPage):
-                # 延迟执行，确保筛选逻辑完成
-                QTimer.singleShot(100, parent.load_data)
+                # 如果没有筛选条件，重新加载所有数据
+                if not has_filters:
+                    QTimer.singleShot(100, parent.load_data)
                 break
             parent = parent.parent()
 
@@ -3375,8 +3412,525 @@ class CombinedExportDialog(QDialog):
 
     def calculate_reward(self):
         """计算奖励结果"""
-        # 暂时占位，稍后实现
-        QMessageBox.information(self, "提示", "计算奖励功能即将实现")
+        from datetime import datetime
+        from src.models.live_viewer import LiveViewer
+        from src.models.live_sign_record import LiveSignRecord
+        from src.models.living import Living
+        
+        logger.info("==================== 开始计算奖励 ====================")
+        
+        # 获取界面上的规则设置
+        rule_type_str = self.rule_type_combo.currentData()
+        batch_id = self.batch_label.text()
+        
+        logger.info(f"规则类型: {rule_type_str}, 批次ID: {batch_id}")
+        
+        # 转换规则类型
+        try:
+            rule_type = RewardRuleType(rule_type_str)
+            logger.info(f"解析规则类型成功: {rule_type}")
+        except ValueError:
+            rule_type = RewardRuleType.ALL_AND  # 默认值
+            logger.warning(f"解析规则类型失败，使用默认值: {rule_type}")
+        
+        # 收集所有选中的直播数据
+        selected_lives = []
+        batch_living_ids = []  # 存储所有直播ID，用于计算观看场次
+        
+        logger.info("开始收集选中的直播数据...")
+        
+        for row in range(self.table.rowCount()):
+            name_widget = self.table.cellWidget(row, 1)
+            if not isinstance(name_widget, QWidget):
+                continue
+                
+            combo = name_widget.property("combo")
+            if not isinstance(combo, QComboBox):
+                continue
+                
+            # 获取选择的直播ID
+            live_id = combo.property("selected_live_id")
+            if not live_id:
+                continue
+                
+            # 获取签到次数和观看时长规则
+            sign_count_spin = self.table.cellWidget(row, 4)
+            watch_time_spin = self.table.cellWidget(row, 5)
+            reward_spin = self.table.cellWidget(row, 6)
+            
+            if not all([isinstance(sign_count_spin, QSpinBox), 
+                       isinstance(watch_time_spin, QSpinBox),
+                       isinstance(reward_spin, QDoubleSpinBox)]):
+                continue
+                
+            rule_sign_count = sign_count_spin.value()
+            rule_watch_time = watch_time_spin.value()
+            reward_amount = reward_spin.value()
+            
+            logger.info(f"选中直播ID: {live_id}, 签到次数规则: {rule_sign_count}, 观看时长规则: {rule_watch_time}, 奖励金额: {reward_amount}")
+            
+            # 将数据添加到待处理列表
+            selected_lives.append({
+                'id': live_id,
+                'rule_sign_count': rule_sign_count,
+                'rule_watch_time': rule_watch_time,
+                'reward_amount': reward_amount,
+            })
+            
+            batch_living_ids.append(live_id)
+            
+        # 检查是否有选择的直播
+        if not selected_lives:
+            logger.warning("没有选择直播进行计算，退出计算过程")
+            QMessageBox.warning(self, "警告", "请至少选择一个直播进行计算。")
+            return
+        
+        logger.info(f"共选择了 {len(selected_lives)} 个直播进行计算")
+            
+        # 获取同一观众最少观看场次
+        rule_watch_count = self.min_watch_count_spin.value()
+        logger.info(f"最少观看场次规则: {rule_watch_count}")
+        
+        # 创建处理进度对话框
+        progress_dialog = QProgressDialog("准备处理数据...", "取消", 0, 100, self)
+        progress_dialog.setWindowModality(Qt.WindowModal)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setValue(0)
+        progress_dialog.show()
+        QApplication.processEvents()
+        
+        # 创建共享数据
+        data_lock = Lock()
+        total_viewers = 0
+        processed_viewers = 0
+        is_cancelled = False
+        
+        # 统一的时间戳，避免不同记录间的时间戳差异
+        current_timestamp = datetime.now()
+        logger.info(f"设置统一时间戳: {current_timestamp}")
+        
+        # 进度更新函数
+        def update_progress(phase="处理中", value=None):
+            nonlocal processed_viewers, total_viewers
+            if value is not None:
+                progress_dialog.setValue(value)
+            elif total_viewers > 0 and not is_cancelled:
+                progress = int((processed_viewers / total_viewers) * 100)
+                progress_dialog.setValue(min(progress, 100))
+            
+            progress_dialog.setLabelText(f"{phase}...")
+            QApplication.processEvents()
+            return progress_dialog.wasCanceled()
+        
+        try:
+            update_progress("正在获取直播数据", 5)
+            
+            # 查询并收集所有需要的数据 - 移出线程中避免数据库连接问题
+            all_live_configs = {}
+            all_viewers = {}
+            all_sign_records = {}
+            all_watch_counts = {}
+            
+            # 记录所有用户ID到直播ID的映射，用于计算场次
+            user_id_to_live_id = defaultdict(list)
+            
+            # 使用主线程获取所有数据，避免子线程中出现数据库连接问题
+            with self.db_manager.get_session() as session:
+                # 1. 获取所有选中直播的观众和签到数据
+                logger.info("开始查询所有选中直播的观众数据...")
+                
+                for live_config in selected_lives:
+                    live_id = live_config['id']
+                    all_live_configs[live_id] = live_config
+                    
+                    # 获取观众数据
+                    viewers = session.query(LiveViewer).filter(LiveViewer.living_id == live_id).all()
+                    all_viewers[live_id] = []
+                    
+                    for viewer in viewers:
+                        # 记录用户ID到直播ID的映射
+                        user_id_to_live_id[viewer.userid].append(live_id)
+                        
+                        # 转换为字典保存
+                        viewer_dict = {
+                            'id': viewer.id,
+                            'userid': viewer.userid,
+                            'name': viewer.name,
+                            'watch_time': viewer.watch_time,
+                            'is_signed': viewer.is_signed,
+                            'sign_time': viewer.sign_time,
+                            'sign_count': viewer.sign_count or 0
+                        }
+                        all_viewers[live_id].append(viewer_dict)
+                    
+                    logger.info(f"直播ID: {live_id} 的观众数量: {len(all_viewers[live_id])}")
+                    total_viewers += len(all_viewers[live_id])
+                
+                logger.info(f"总观众数量: {total_viewers}")
+                
+                # 2. 获取所有观众的签到记录
+                logger.info("开始查询所有观众的签到记录...")
+                
+                for live_id, viewers in all_viewers.items():
+                    viewer_ids = [v['id'] for v in viewers]
+                    
+                    if not viewer_ids:
+                        continue
+                    
+                    # 使用分批查询减少内存使用
+                    batch_size = 500
+                    all_sign_records[live_id] = {}
+                    
+                    for i in range(0, len(viewer_ids), batch_size):
+                        batch_ids = viewer_ids[i:i+batch_size]
+                        
+                        # 使用分组查询获取签到次数
+                        sign_counts = session.query(
+                            LiveSignRecord.viewer_id, 
+                            LiveSignRecord.living_id, 
+                            func.count(LiveSignRecord.id).label('count')
+                        ).filter(
+                            LiveSignRecord.viewer_id.in_(batch_ids),
+                            LiveSignRecord.living_id == live_id
+                        ).group_by(
+                            LiveSignRecord.viewer_id, 
+                            LiveSignRecord.living_id
+                        ).all()
+                        
+                        for viewer_id, living_id, count in sign_counts:
+                            if viewer_id not in all_sign_records[live_id]:
+                                all_sign_records[live_id][viewer_id] = {}
+                            all_sign_records[live_id][viewer_id][str(living_id)] = count
+                
+                # 3. 计算每个观众的观看场次
+                logger.info("开始计算每个观众的观看场次...")
+                
+                for userid, live_ids in user_id_to_live_id.items():
+                    # 计算当前用户观看的不同直播数
+                    unique_live_ids = set(live_ids)
+                    watch_count = len(unique_live_ids)
+                    all_watch_counts[userid] = watch_count
+                    logger.debug(f"用户 {userid} 观看了 {watch_count} 场直播")
+            
+            update_progress("预处理数据完成", 10)
+            
+            # 准备线程处理函数
+            def process_chunk(live_id, viewers_chunk, sign_records, watch_counts, live_config, rule_watch_count_value):
+                nonlocal processed_viewers, is_cancelled, data_lock
+                
+                logger.debug(f"开始处理直播 {live_id} 的观众数据块，数量: {len(viewers_chunk)}")
+                
+                if is_cancelled:
+                    return None
+                
+                # 从配置中获取规则设置
+                rule_sign_count = live_config['rule_sign_count']
+                # 修复这里的错误 - 移除将分钟转换为秒的代码
+                rule_watch_time = live_config['rule_watch_time']  # UI传入的已经是秒，不需要再转换
+                rule_amount = live_config['reward_amount']  # 页面设置的金额
+                
+                logger.debug(f"直播 {live_id} 的规则设置: 签到次数={rule_sign_count}, 观看时长={rule_watch_time}秒, 奖励金额={rule_amount}")
+                
+                # 准备结果数据结构 - 深拷贝避免共享数据问题
+                reward_records = []
+                viewer_updates = []
+                
+                # 处理每个观众
+                for viewer in viewers_chunk:
+                    if is_cancelled:
+                        return None
+                    
+                    viewer_id = viewer['id']
+                    userid = viewer['userid']
+                    # 添加观众名称，方便日志识别
+                    viewer_name = viewer['name']
+                    
+                    # 增加详细日志，清晰记录每个观众的原始数据
+                    logger.info(f"处理观众: {viewer_name}(ID:{viewer_id}, UserID:{userid})")
+                    logger.info(f"观众原始数据: 是否签到={viewer['is_signed']}, 观看时长={viewer['watch_time']}秒, 签到次数={viewer['sign_count']}")
+                    
+                    # 获取签到记录数 - 从预加载数据中获取
+                    sign_count = 0
+                    if viewer_id in sign_records and str(live_id) in sign_records[viewer_id]:
+                        sign_count = sign_records[viewer_id][str(live_id)]
+                    
+                    # 修复：如果从签到记录中无法获取签到次数，则使用viewer本身的sign_count
+                    if sign_count == 0 and viewer['is_signed'] and viewer['sign_count'] > 0:
+                        sign_count = viewer['sign_count']
+                        logger.info(f"从viewer记录获取的签到次数: {sign_count}")
+                    
+                    logger.info(f"观众 {viewer_name} 的签到次数: {sign_count}")
+                    
+                    # 获取观看次数 - 从预加载数据中获取
+                    watch_count = 0
+                    if userid in watch_counts:
+                        watch_count = watch_counts[userid]
+                    
+                    logger.info(f"观众 {viewer_name} 的观看场次: {watch_count}")
+                    
+                    # 获取观看时长
+                    watch_time = viewer['watch_time'] or 0
+                    logger.info(f"观众 {viewer_name} 的观看时长: {watch_time}秒")
+                    
+                    # 添加更详细的规则比较日志
+                    logger.info(f"规则要求: 签到次数≥{rule_sign_count}, 观看时长≥{rule_watch_time}秒, 观看场次≥{rule_watch_count_value}")
+                    
+                    # 判断是否符合奖励条件
+                    is_eligible = False
+                    
+                    # 增加规则判断的详细日志
+                    if rule_type == RewardRuleType.SIGN:
+                        is_eligible = sign_count >= rule_sign_count
+                        logger.info(f"观众 {viewer_name} 签到规则检查: {sign_count} >= {rule_sign_count} = {is_eligible}")
+                    elif rule_type == RewardRuleType.WATCH:
+                        is_eligible = watch_time >= rule_watch_time
+                        logger.info(f"观众 {viewer_name} 观看时长规则检查: {watch_time} >= {rule_watch_time} = {is_eligible}")
+                    elif rule_type == RewardRuleType.COUNT:
+                        is_eligible = watch_count >= rule_watch_count_value
+                        logger.info(f"观众 {viewer_name} 观看场次规则检查: {watch_count} >= {rule_watch_count_value} = {is_eligible}")
+                    elif rule_type == RewardRuleType.SIGN_WATCH:
+                        sign_check = sign_count >= rule_sign_count
+                        watch_check = watch_time >= rule_watch_time
+                        is_eligible = sign_check and watch_check
+                        logger.info(f"观众 {viewer_name} 签到+观看时长规则检查: 签到({sign_count} >= {rule_sign_count} = {sign_check}) 且 观看时长({watch_time} >= {rule_watch_time} = {watch_check}) = {is_eligible}")
+                    elif rule_type == RewardRuleType.SIGN_COUNT:
+                        sign_check = sign_count >= rule_sign_count
+                        count_check = watch_count >= rule_watch_count_value
+                        is_eligible = sign_check and count_check
+                        logger.info(f"观众 {viewer_name} 签到+观看场次规则检查: 签到({sign_count} >= {rule_sign_count} = {sign_check}) 且 观看场次({watch_count} >= {rule_watch_count_value} = {count_check}) = {is_eligible}")
+                    elif rule_type == RewardRuleType.WATCH_COUNT:
+                        watch_check = watch_time >= rule_watch_time
+                        count_check = watch_count >= rule_watch_count_value
+                        is_eligible = watch_check and count_check
+                        logger.info(f"观众 {viewer_name} 观看时长+观看场次规则检查: 观看时长({watch_time} >= {rule_watch_time} = {watch_check}) 且 观看场次({watch_count} >= {rule_watch_count_value} = {count_check}) = {is_eligible}")
+                    elif rule_type == RewardRuleType.ALL_OR:
+                        sign_check = sign_count >= rule_sign_count
+                        watch_check = watch_time >= rule_watch_time
+                        count_check = watch_count >= rule_watch_count_value
+                        is_eligible = sign_check or watch_check or count_check
+                        logger.info(f"观众 {viewer_name} 全部条件(OR)规则检查: 签到({sign_count} >= {rule_sign_count} = {sign_check}) 或 观看时长({watch_time} >= {rule_watch_time} = {watch_check}) 或 观看场次({watch_count} >= {rule_watch_count_value} = {count_check}) = {is_eligible}")
+                    elif rule_type == RewardRuleType.ALL_AND:
+                        sign_check = sign_count >= rule_sign_count
+                        watch_check = watch_time >= rule_watch_time
+                        count_check = watch_count >= rule_watch_count_value
+                        is_eligible = sign_check and watch_check and count_check
+                        logger.info(f"观众 {viewer_name} 全部条件(AND)规则检查: 签到({sign_count} >= {rule_sign_count} = {sign_check}) 且 观看时长({watch_time} >= {rule_watch_time} = {watch_check}) 且 观看场次({watch_count} >= {rule_watch_count_value} = {count_check}) = {is_eligible}")
+                    
+                    logger.info(f"观众 {viewer_name} 最终奖励资格判断: {is_eligible}")
+                    
+                    # 创建奖励记录
+                    reward_record = {
+                        'living_id': live_id,
+                        'live_viewer_id': viewer_id,
+                        'rule_type': rule_type.value,  # 存储枚举的字符串值
+                        'rule_sign_count': rule_sign_count,
+                        'rule_watch_time': rule_watch_time,
+                        'rule_watch_count': rule_watch_count_value,
+                        'calculate_batch': batch_id,
+                        'reward_amount': rule_amount,  # live_reward_records.reward_amount记录页面设置的金额
+                        'is_reward_eligible': is_eligible,
+                        'created_at': current_timestamp,
+                        'updated_at': current_timestamp
+                    }
+                    
+                    logger.debug(f"创建观众 {viewer_name} 的奖励记录: {reward_record}")
+                    
+                    # 准备viewer更新数据
+                    viewer_update = {
+                        'id': viewer_id,
+                        'is_reward_eligible': is_eligible,
+                        'reward_amount': rule_amount if is_eligible else 0.0,  # live_viewers.reward_amount记录合格后的实际金额
+                        'reward_status': '批量计算',
+                        'updated_at': current_timestamp
+                    }
+                    
+                    logger.debug(f"准备更新观众 {viewer_name} 的viewer记录: {viewer_update}")
+                    
+                    reward_records.append(reward_record)
+                    viewer_updates.append(viewer_update)
+                    
+                    # 更新进度
+                    with data_lock:
+                        processed_viewers += 1
+                
+                logger.debug(f"完成直播 {live_id} 的一个观众数据块处理，生成了 {len(reward_records)} 条奖励记录")
+                return {
+                    'reward_records': reward_records,
+                    'viewer_updates': viewer_updates
+                }
+            
+            # 创建处理任务 - 每个直播作为一个处理单元
+            all_results = []
+            processing_tasks = []
+            
+            update_progress("开始处理数据", 15)
+            
+            # 创建一个线程池
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                logger.info("创建线程池，开始提交处理任务...")
+                
+                # 为每个直播创建处理任务
+                for live_id, viewers in all_viewers.items():
+                    if is_cancelled:
+                        break
+                    
+                    live_config = all_live_configs[live_id]
+                    sign_records = all_sign_records.get(live_id, {})
+                    
+                    # 分批处理观众数据，降低内存使用
+                    chunk_size = 200
+                    for i in range(0, len(viewers), chunk_size):
+                        if is_cancelled:
+                            break
+                            
+                        viewers_chunk = viewers[i:i+chunk_size]
+                        logger.info(f"提交任务处理直播 {live_id} 的观众数据，分片大小: {len(viewers_chunk)}，观众数据范围: {i} 到 {i+len(viewers_chunk)-1}")
+                        
+                        # 提交任务到线程池
+                        task = executor.submit(
+                            process_chunk, 
+                            live_id, 
+                            viewers_chunk, 
+                            sign_records, 
+                            all_watch_counts, 
+                            live_config,
+                            rule_watch_count
+                        )
+                        processing_tasks.append(task)
+                
+                # 等待所有任务完成
+                logger.info(f"等待 {len(processing_tasks)} 个处理任务完成...")
+                for i, future in enumerate(concurrent.futures.as_completed(processing_tasks)):
+                    if update_progress(f"处理中 ({i+1}/{len(processing_tasks)})"):
+                        is_cancelled = True
+                        logger.warning("用户取消了处理")
+                        break
+                    
+                    # 获取任务结果
+                    try:
+                        result = future.result()
+                        if result:
+                            all_results.append(result)
+                    except Exception as e:
+                        logger.error(f"处理任务发生错误: {str(e)}")
+                
+            # 如果用户取消了操作
+            if is_cancelled:
+                logger.warning("处理被用户取消，取消所有后续操作")
+                progress_dialog.close()
+                QMessageBox.information(self, "提示", "操作已取消。")
+                return
+            
+            # 合并所有结果
+            update_progress("正在合并处理结果", 80)
+            all_reward_records = []
+            all_viewer_updates = []
+            
+            for result in all_results:
+                all_reward_records.extend(result['reward_records'])
+                all_viewer_updates.extend(result['viewer_updates'])
+            
+            logger.info(f"合并所有结果完成，共有 {len(all_reward_records)} 条奖励记录和 {len(all_viewer_updates)} 条viewer更新")
+            
+            # 批量保存数据到数据库
+            update_progress("正在保存数据到数据库", 85)
+            success = False
+            
+            try:
+                with self.db_manager.get_session() as session:
+                    # 1. 删除旧的奖励记录 - 使用直播ID列表
+                    logger.info(f"删除选中的直播ID对应的旧奖励记录: {batch_living_ids}")
+                    delete_result = session.query(LiveRewardRecord).filter(
+                        LiveRewardRecord.living_id.in_(batch_living_ids)
+                    ).delete(synchronize_session=False)
+                    logger.info(f"删除旧奖励记录结果: 已删除 {delete_result} 条记录")
+                    
+                    # 2. 插入新的奖励记录
+                    if all_reward_records:
+                        logger.info(f"开始批量插入 {len(all_reward_records)} 条新奖励记录...")
+                        
+                        # 分批插入减轻数据库压力
+                        batch_size = 1000
+                        for i in range(0, len(all_reward_records), batch_size):
+                            batch = all_reward_records[i:i+batch_size]
+                            
+                            session.execute(
+                                LiveRewardRecord.__table__.insert(),
+                                [record for record in batch]
+                            )
+                            
+                            logger.info(f"已插入 {i+len(batch)} / {len(all_reward_records)} 条奖励记录")
+                    
+                    # 3. 更新观众记录
+                    if all_viewer_updates:
+                        logger.info(f"开始批量更新 {len(all_viewer_updates)} 条观众记录...")
+                        
+                        # 准备批量更新数据
+                        viewer_ids = [update['id'] for update in all_viewer_updates]
+                        
+                        # 基本信息
+                        update_data = {
+                            'is_reward_eligible': False,
+                            'reward_amount': 0.0,
+                            'reward_status': '批量计算',
+                            'updated_at': current_timestamp
+                        }
+                        
+                        # 批量更新所有记录
+                        session.query(LiveViewer).filter(
+                            LiveViewer.id.in_(viewer_ids)
+                        ).update(update_data, synchronize_session=False)
+                        
+                        # 逐个更新符合条件的记录
+                        eligible_updates = [u for u in all_viewer_updates if u['is_reward_eligible']]
+                        logger.info(f"其中有 {len(eligible_updates)} 条观众记录符合奖励条件，需要单独更新")
+                        
+                        for update in eligible_updates:
+                            session.query(LiveViewer).filter(
+                                LiveViewer.id == update['id']
+                            ).update({
+                                'is_reward_eligible': True,
+                                'reward_amount': update['reward_amount']
+                            }, synchronize_session=False)
+                    
+                    # 提交事务
+                    logger.info("提交所有数据库操作...")
+                    session.commit()
+                    success = True
+                    logger.info("数据保存成功！")
+                    
+            except Exception as e:
+                logger.error(f"保存数据到数据库时出错: {str(e)}")
+                QMessageBox.critical(self, "错误", f"保存数据到数据库时出错: {str(e)}")
+            
+            # 关闭进度对话框
+            progress_dialog.close()
+            
+            # 显示处理结果
+            if success:
+                eligible_count = sum(1 for r in all_reward_records if r['is_reward_eligible'])
+                total_reward = sum(r['reward_amount'] for r in all_viewer_updates if r['is_reward_eligible'])
+                
+                logger.info(f"奖励计算完成！处理了 {len(all_reward_records)} 条记录，符合奖励条件: {eligible_count} 人，奖励总金额: ¥{total_reward:.2f}")
+                
+                QMessageBox.information(
+                    self, 
+                    "处理完成", 
+                    f"奖励计算完成！\n\n"
+                    f"处理了 {len(all_reward_records)} 条记录\n"
+                    f"符合奖励条件: {eligible_count} 人\n"
+                    f"不符合条件: {len(all_reward_records) - eligible_count} 人\n"
+                    f"奖励总金额: ¥{total_reward:.2f}\n\n"
+                    f"计算批次: {batch_id}"
+                )
+                
+        except Exception as e:
+            logger.error(f"处理过程出错: {str(e)}")
+            logger.exception("详细错误信息：")
+            QMessageBox.critical(self, "错误", f"处理过程出错: {str(e)}")
+            progress_dialog.close()
+        
+        logger.info("==================== 结束计算奖励 ====================")
         
     def export_data(self):
         """导出数据"""
