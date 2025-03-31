@@ -4,7 +4,6 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from models.live_booking import LiveBooking
 from models.live_viewer import LiveViewer
-from models.sign_record import SignRecord
 from utils.logger import get_logger
 from utils.cache import Cache
 
@@ -35,11 +34,11 @@ class StatsManager:
                 if not live:
                     return {}
                     
-                # 获取观看记录
+                # 获取观看记录，包含签到信息
                 viewers = session.query(LiveViewer).filter_by(living_id=living_id).all()
                 
-                # 获取签到记录
-                sign_records = session.query(SignRecord).filter_by(living_id=living_id).all()
+                # 筛选已签到的观众
+                sign_records = [v for v in viewers if v.is_signed]
                 
                 # 计算统计数据
                 stats = {
@@ -52,19 +51,19 @@ class StatsManager:
                     },
                     "viewer_stats": {
                         "total_viewers": len(viewers),
-                        "internal_viewers": len([v for v in viewers if v.user_type == 1]),
-                        "external_viewers": len([v for v in viewers if v.user_type == 2]),
+                        "internal_viewers": len([v for v in viewers if v.user_type == 2]),
+                        "external_viewers": len([v for v in viewers if v.user_type == 1]),
                         "peak_viewers": self._calculate_peak_viewers(viewers),
                         "peak_time": self._calculate_peak_time(viewers),
-                        "avg_watch_time": sum(v.total_watch_time for v in viewers) / len(viewers) if viewers else 0,
+                        "avg_watch_time": sum(v.watch_time for v in viewers) / len(viewers) if viewers else 0,
                         "comment_count": sum(1 for v in viewers if v.is_comment),
                         "mic_count": sum(1 for v in viewers if v.is_mic)
                     },
                     "sign_stats": {
                         "total_signs": len(sign_records),
-                        "unique_signers": len(set(s.user_id for s in sign_records)),
-                        "normal_signs": len([s for s in sign_records if s.sign_type == 1]),
-                        "makeup_signs": len([s for s in sign_records if s.sign_type == 2])
+                        "unique_signers": len(set(s.userid for s in sign_records)),
+                        "normal_signs": len([s for s in sign_records if s.sign_type == "自动签到"]),
+                        "makeup_signs": len([s for s in sign_records if s.sign_type == "补签"])
                     }
                 }
                 
@@ -78,19 +77,16 @@ class StatsManager:
     def _calculate_peak_viewers(self, viewers: List[LiveViewer]) -> int:
         """计算峰值观看人数"""
         try:
-            # 按5分钟间隔统计在线人数
-            time_slots = {}
+            # 使用watch_time作为简化的计算方式
+            # 将观众按观看时长分组并返回最高值
+            watch_time_groups = {}
             for viewer in viewers:
-                if not viewer.first_enter_time or not viewer.last_leave_time:
-                    continue
+                if viewer.watch_time:
+                    # 将观看时长分为30分钟分组
+                    group = viewer.watch_time // 1800  # 1800秒 = 30分钟
+                    watch_time_groups[group] = watch_time_groups.get(group, 0) + 1
                     
-                current_time = viewer.first_enter_time
-                while current_time <= viewer.last_leave_time:
-                    slot_key = current_time.strftime("%Y-%m-%d %H:%M")
-                    time_slots[slot_key] = time_slots.get(slot_key, 0) + 1
-                    current_time += timedelta(minutes=5)
-                    
-            return max(time_slots.values()) if time_slots else 0
+            return max(watch_time_groups.values()) if watch_time_groups else 0
             
         except Exception as e:
             logger.error(f"计算峰值观看人数失败: {str(e)}")
@@ -99,24 +95,21 @@ class StatsManager:
     def _calculate_peak_time(self, viewers: List[LiveViewer]) -> datetime:
         """计算峰值观看时间"""
         try:
-            # 按5分钟间隔统计在线人数
+            # LiveViewer模型不再存储具体的首次进入和最后离开时间
+            # 使用sign_time作为替代数据源进行简化计算
             time_slots = {}
             for viewer in viewers:
-                if not viewer.first_enter_time or not viewer.last_leave_time:
-                    continue
-                    
-                current_time = viewer.first_enter_time
-                while current_time <= viewer.last_leave_time:
-                    slot_key = current_time.strftime("%Y-%m-%d %H:%M")
+                if viewer.sign_time:
+                    # 按小时分组
+                    slot_key = viewer.sign_time.strftime("%Y-%m-%d %H")
                     time_slots[slot_key] = time_slots.get(slot_key, 0) + 1
-                    current_time += timedelta(minutes=5)
                     
             if not time_slots:
                 return None
                 
             # 找出人数最多的时间段
             peak_slot = max(time_slots.items(), key=lambda x: x[1])
-            return datetime.strptime(peak_slot[0], "%Y-%m-%d %H:%M")
+            return datetime.strptime(peak_slot[0], "%Y-%m-%d %H")
             
         except Exception as e:
             logger.error(f"计算峰值观看时间失败: {str(e)}")
@@ -137,32 +130,32 @@ class StatsManager:
             
         try:
             with self.db_manager.get_session() as session:
-                # 获取观看记录
+                # 获取观看和签到记录
                 viewers = session.query(LiveViewer).filter_by(living_id=living_id).all()
                 
-                # 获取签到记录
-                sign_records = session.query(SignRecord).filter_by(living_id=living_id).all()
+                # 筛选已签到的观众
+                sign_records = [v for v in viewers if v.is_signed]
                 
                 # 构建用户画像数据
                 profile = {
                     "viewer_stats": {
                         "total_viewers": len(viewers),
-                        "internal_viewers": len([v for v in viewers if v.user_type == 1]),
-                        "external_viewers": len([v for v in viewers if v.user_type == 2]),
-                        "avg_watch_time": sum(v.total_watch_time for v in viewers) / len(viewers) if viewers else 0,
-                        "max_watch_time": max((v.total_watch_time for v in viewers), default=0),
-                        "min_watch_time": min((v.total_watch_time for v in viewers), default=0)
+                        "internal_viewers": len([v for v in viewers if v.user_type == 2]),
+                        "external_viewers": len([v for v in viewers if v.user_type == 1]),
+                        "avg_watch_time": sum(v.watch_time for v in viewers) / len(viewers) if viewers else 0,
+                        "max_watch_time": max((v.watch_time for v in viewers), default=0),
+                        "min_watch_time": min((v.watch_time for v in viewers), default=0)
                     },
                     "sign_stats": {
                         "total_signs": len(sign_records),
-                        "valid_signs": len([s for s in sign_records if s.sign_status == 1]),
-                        "normal_signs": len([s for s in sign_records if s.sign_type == 1]),
-                        "makeup_signs": len([s for s in sign_records if s.sign_type == 2])
+                        "valid_signs": len(sign_records),  # 所有is_signed=True的记录都是有效的
+                        "normal_signs": len([s for s in sign_records if s.sign_type == "自动签到"]),
+                        "makeup_signs": len([s for s in sign_records if s.sign_type == "补签"])
                     },
                     "engagement_stats": {
                         "comment_rate": len([v for v in viewers if v.is_comment]) / len(viewers) if viewers else 0,
                         "mic_rate": len([v for v in viewers if v.is_mic]) / len(viewers) if viewers else 0,
-                        "sign_rate": len(set(s.user_id for s in sign_records)) / len(viewers) if viewers else 0
+                        "sign_rate": len(sign_records) / len(viewers) if viewers else 0
                     }
                 }
                 

@@ -25,16 +25,14 @@ logger = get_logger(__name__)
 class LiveBookingPage(QWidget):
     """直播预约页面"""
     
-    def __init__(self, db_manager: DatabaseManager, wecom_api: WeComAPI, task_manager: TaskManager):
+    def __init__(self, db_manager: DatabaseManager, wecom_api: WeComAPI, task_manager: TaskManager, user_id=None):
         super().__init__()
         self.db_manager = db_manager
         self.wecom_api = wecom_api
         self.task_manager = task_manager
         self.performance_manager = PerformanceManager()
         self.error_handler = ErrorHandler()
-        self.current_user = None
-        with self.db_manager.get_session() as session:
-            self.current_user = session.query(User).order_by(User.last_login.desc()).first()
+        self.user_id = user_id  # 用户ID而不是用户对象
         self.init_ui()
         
     def init_ui(self):
@@ -253,19 +251,22 @@ class LiveBookingPage(QWidget):
     def _load_users(self):
         """加载用户列表"""
         try:
-            if not self.current_user:
-                ErrorHandler.handle_warning("无法获取当前用户信息", self)
-                return
-            
             with self.db_manager.get_session() as session:
-                # 刷新当前用户信息
-                current_user = session.merge(self.current_user)
-                session.refresh(current_user)
+                # 获取当前用户信息（如果有用户ID）
+                current_user = None
+                if self.user_id:
+                    current_user = session.query(User).filter_by(userid=self.user_id).first()
+                
+                # 如果无法获取当前用户，获取最后登录的用户作为默认值
+                if not current_user:
+                    current_user = session.query(User).order_by(User.last_login.desc()).first()
+                    if current_user:
+                        self.user_id = current_user.userid
                 
                 # 清空下拉列表
                 self.anchor_combo.clear()
                 
-                if current_user.login_name.lower() == "root-admin":
+                if current_user and current_user.login_name.lower() == "root-admin":
                     # 如果是超级管理员，加载除root-admin外的所有用户
                     users = session.query(User).filter(
                         User.login_name != "root-admin",
@@ -274,38 +275,30 @@ class LiveBookingPage(QWidget):
                     
                     # 添加用户到下拉列表
                     for user in users:
-                        # 使用wecom_code或login_name作为值
-                        user_id = user.wecom_code if user.wecom_code else user.login_name
-                        # 显示格式：用户名(所属企业名称)
-                        display_name = f"{user.name} ({user_id}|{user.corpname or '未知企业'})"
-                        self.anchor_combo.addItem(display_name, user_id)
+                        # 使用login_name作为值，而不是wecom_code
+                        user_login_name = user.login_name
+                        # 显示格式：用户名(登录名|所属企业名称)
+                        display_name = f"{user.name} ({user_login_name}|{user.corpname or '未知企业'})"
+                        self.anchor_combo.addItem(display_name, user_login_name)
                 else:
-                    # 普通用户只能看到同企业的用户
-                    if not current_user.corpid:
-                        ErrorHandler.handle_warning("无法获取当前用户所属企业", self)
-                        return
-                    
-                    # 获取当前企业的所有用户
-                    users = session.query(User).filter_by(
-                        corpid=current_user.corpid,
-                        is_active=True  # 只获取激活的用户
-                    ).all()
-                    
-                    # 添加用户到下拉列表
-                    for user in users:
-                        # 使用wecom_code或login_name作为值
-                        user_id = user.wecom_code if user.wecom_code else user.login_name
-                        self.anchor_combo.addItem(f"{user.name} ({user_id})", user_id)
+                    # 非超级管理员，只显示自己
+                    if current_user:
+                        # 使用login_name作为值，而不是wecom_code
+                        user_login_name = current_user.login_name
+                        display_name = f"{current_user.name} ({user_login_name}|{current_user.corpname or '未知企业'})"
+                        self.anchor_combo.addItem(display_name, user_login_name)
                 
                 # 设置当前用户为默认值（如果不是root-admin的话）
-                if current_user.login_name.lower() != "root-admin":
-                    current_user_id = current_user.wecom_code if current_user.wecom_code else current_user.login_name
-                    index = self.anchor_combo.findData(current_user_id)
+                if current_user and current_user.login_name.lower() != "root-admin":
+                    # 使用login_name作为值，而不是wecom_code
+                    current_user_login_name = current_user.login_name
+                    index = self.anchor_combo.findData(current_user_login_name)
                     if index >= 0:
                         self.anchor_combo.setCurrentIndex(index)
                         
         except Exception as e:
-            ErrorHandler.handle_error(e, self, "加载用户列表失败")
+            logger.error(f"加载用户列表失败: {str(e)}")
+            self.error_handler.handle_error(e, self, "加载用户列表失败")
         
     def _on_time_changed(self):
         """时间变化事件处理"""
@@ -395,15 +388,26 @@ class LiveBookingPage(QWidget):
             if not self._validate_input():
                 return
                 
+            # 获取主播的登录名（用于查询应用ID）和企业微信ID（用于创建直播）
+            login_name = self.anchor_combo.currentData()  # 这是登录名，用于查询应用ID
+            anchor_id = login_name  # 默认使用登录名作为企业微信ID
+            
+            # 查询用户的wecom_code，如果有则使用它作为企业微信ID
+            with self.db_manager.get_session() as session:
+                from src.models.user import User
+                user = session.query(User).filter_by(login_name=login_name).first()
+                if user and user.wecom_code:
+                    anchor_id = user.wecom_code
+            
             # 获取输入数据
             data = {
-                "anchor_userid": self.anchor_combo.currentData() or self.anchor_combo.currentText().strip(),
+                "anchor_userid": anchor_id,  # 使用企业微信ID作为主播ID
                 "theme": self.title_input.text().strip(),
                 "living_start": int(self.start_time.dateTime().toSecsSinceEpoch()),
                 "living_duration": self.duration.value(),
                 "description": self.desc_input.toPlainText().strip(),
                 "type": self.type_combo.currentIndex(),
-                "agentid": self.db_manager.get_current_agent_id()
+                "agentid": self.db_manager.get_agent_id_by_user(login_name)  # 使用登录名查询应用ID
             }
             
             # 显示确认对话框
@@ -427,7 +431,7 @@ class LiveBookingPage(QWidget):
             
             if result["errcode"] == 0:
                 # 保存到数据库
-                self.save_live_info(result["livingid"], data)
+                live = self.save_live_info(result["livingid"], data)
                 
                 # 调度详情拉取任务
                 self.task_manager.schedule_live_info_task(
@@ -435,14 +439,14 @@ class LiveBookingPage(QWidget):
                     data["living_start"]
                 )
                 
-                # 显示成功消息
-                ErrorHandler.handle_info("直播预约创建成功", self, "成功")
+                # 显示成功对话框
+                from src.ui.components.dialogs.live_dialogs import LiveCreateSuccessDialog
+                dialog = LiveCreateSuccessDialog(result, self)
+                dialog.navigate_to_list.connect(self._navigate_to_live_list)
+                dialog.exec()
                 
                 # 清空表单
                 self._clear_form()
-                
-                # 添加淡出动画
-                AnimationManager.fade_out(self)
                 
             else:
                 ErrorHandler.handle_error(
@@ -453,7 +457,33 @@ class LiveBookingPage(QWidget):
             
         except Exception as e:
             ErrorHandler.handle_error(e, self, "保存直播信息失败")
+
+    def _navigate_to_live_list(self):
+        """导航到直播列表页面"""
+        try:
+            # 通知父窗口或主窗口切换到直播列表页面
+            # 由于不同的UI结构可能有不同的实现方式，这里找到主窗口并调用相应方法
+            from src.ui.windows.main_window import MainWindow
             
+            # 向上遍历父窗口，找到主窗口
+            parent = self.parent()
+            while parent and not isinstance(parent, MainWindow):
+                parent = parent.parent()
+                
+            if parent and isinstance(parent, MainWindow):
+                # 如果找到主窗口，切换到直播列表页面
+                # 假设主窗口有switchToLiveList方法
+                if hasattr(parent, 'switchToLiveList'):
+                    parent.switchToLiveList()
+                elif hasattr(parent, 'home_page') and hasattr(parent.home_page, 'switchToLiveList'):
+                    parent.home_page.switchToLiveList()
+                else:
+                    logger.warning("无法切换到直播列表页面：未找到切换方法")
+            else:
+                logger.warning("无法切换到直播列表页面：未找到主窗口")
+        except Exception as e:
+            logger.error(f"切换到直播列表页面时出错: {str(e)}")
+
     def _clear_form(self):
         """清空表单"""
         self.title_input.clear()
@@ -468,6 +498,15 @@ class LiveBookingPage(QWidget):
         """保存直播信息到数据库"""
         try:
             with self.db_manager.get_session() as session:
+                # 获取当前用户对应的企业名称
+                from src.models.user import User
+                current_user = None
+                if self.user_id:
+                    current_user = session.query(User).filter_by(userid=self.user_id).first()
+                
+                # 获取企业名称
+                corpname = current_user.corpname if current_user and current_user.corpname else "未知企业"
+                
                 live = LiveBooking(
                     livingid=livingid,
                     anchor_userid=data["anchor_userid"],
@@ -476,10 +515,13 @@ class LiveBookingPage(QWidget):
                     living_duration=data["living_duration"],
                     description=data["description"],
                     type=data["type"],
-                    status=0  # 预约中
+                    status=0,  # 预约中
+                    corpname=corpname,  # 添加企业名称
+                    agentid=data["agentid"]  # 应用ID
                 )
                 session.add(live)
                 session.commit()
+                return live
         except Exception as e:
             ErrorHandler.handle_error(e, self, "保存直播信息到数据库失败")
             raise 

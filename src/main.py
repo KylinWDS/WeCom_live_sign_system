@@ -6,10 +6,12 @@ import json
 
 # PySide6导入
 from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtGui import QIcon
 
 # UI相关导入
 from .ui.windows.login_window import LoginWindow
 from .ui.components.dialogs.init_wizard import InitWizard
+from .ui.windows.main_window import MainWindow
 
 # 核心功能导入
 from .core.database import DatabaseManager
@@ -18,6 +20,7 @@ from .core.auth_manager import AuthManager
 
 # 工具类导入
 from .utils.logger import get_logger, setup_logger
+from .utils.error_handler import ErrorHandler
 
 # 应用上下文导入
 from .app import init_app_context
@@ -87,8 +90,12 @@ def get_config_path():
 def main():
     """主程序入口"""
     try:
+        # 安装全局异常处理器
+        ErrorHandler.install_global_exception_handler()
+        
         # 创建应用实例
         app = QApplication(sys.argv)
+        app.setApplicationName("企业微信直播签到系统")
 
         # 获取配置路径
         config_dir, need_init = get_config_path()
@@ -108,6 +115,7 @@ def main():
                 log_retention=30
             )
             logger = get_logger(__name__)
+            logger.info("正在启动应用程序...")
 
             # 创建数据库管理器和认证管理器（空配置）
             db_manager = DatabaseManager()
@@ -120,7 +128,7 @@ def main():
             wizard = InitWizard(db_manager, config_manager, auth_manager)
             if wizard.exec() != InitWizard.Accepted:
                 logger.info("用户取消初始化")
-                return
+                return 0
 
             # 获取已初始化的管理器
             config_manager = wizard.config_manager
@@ -150,6 +158,7 @@ def main():
             log_retention = config_manager.get("system.log_retention", 30)
             setup_logger(log_path, log_level, log_retention)
             logger = get_logger(__name__)
+            logger.info("正在启动应用程序...")
 
             # 初始化数据库管理器
             db_manager = DatabaseManager()
@@ -170,10 +179,16 @@ def main():
         login_window.show()
 
         # 运行应用
-        return app.exec()
+        result = app.exec()
+        
+        # 正常退出
+        logger.info("应用程序正常退出")
+        return result
 
     except Exception as e:
-        print(f"程序启动失败: {str(e)}")
+        # 未处理的异常
+        logger = get_logger(__name__)
+        logger.critical(f"未处理异常: {str(e)}", exc_info=True)
         show_error_dialog("错误", f"程序启动失败: {str(e)}")
         return 1
 

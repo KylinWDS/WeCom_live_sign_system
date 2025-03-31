@@ -219,104 +219,154 @@ class ErrorHandler(QObject):
         return decorator
 
     @staticmethod
-    def handle_error(error: Exception, parent: Optional[QWidget] = None, title: str = "错误") -> None:
+    def handle_error(error, parent=None, title="错误"):
         """处理错误
         
         Args:
-            error: 异常对象
+            error: 错误对象
             parent: 父窗口
-            title: 对话框标题
+            title: 错误标题
         """
-        try:
-            # 记录错误日志
-            logger.error(f"发生错误: {str(error)}", exc_info=True)
-            
-            # 显示错误对话框
-            QMessageBox.critical(
-                parent,
-                title,
-                f"发生错误:\n{str(error)}"
-            )
-            
-        except Exception as e:
-            logger.error(f"处理错误时发生异常: {str(e)}", exc_info=True)
-            
+        error_message = str(error)
+        traceback_str = traceback.format_exc()
+        
+        # 记录错误
+        logger.error(f"{title}: {error_message}\n{traceback_str}")
+        
+        # 检查parent参数类型，确保是QWidget或None
+        if parent is not None and not isinstance(parent, QWidget):
+            logger.warning(f"handle_error接收到非QWidget的parent参数: {type(parent)}")
+            parent = None  # 将非法parent设为None
+        
+        # 显示错误对话框
+        if parent:
+            QMessageBox.critical(parent, title, error_message)
+        return False
+    
     @staticmethod
-    def handle_warning(message: str, parent: Optional[QWidget] = None, title: str = "警告") -> None:
+    def handle_warning(message, parent=None, title="警告"):
         """处理警告
         
         Args:
             message: 警告消息
             parent: 父窗口
-            title: 对话框标题
+            title: 警告标题
         """
-        try:
-            # 记录警告日志
-            logger.warning(message)
-            
-            # 显示警告对话框
-            QMessageBox.warning(
-                parent,
-                title,
-                message
-            )
-            
-        except Exception as e:
-            logger.error(f"处理警告时发生异常: {str(e)}", exc_info=True)
-            
+        # 记录警告
+        logger.warning(f"{title}: {message}")
+        
+        # 检查parent参数类型，确保是QWidget或None
+        if parent is not None and not isinstance(parent, QWidget):
+            logger.warning(f"handle_warning接收到非QWidget的parent参数: {type(parent)}")
+            parent = None  # 将非法parent设为None
+        
+        # 显示警告对话框
+        if parent:
+            QMessageBox.warning(parent, title, message)
+        return False
+    
     @staticmethod
-    def handle_info(message: str, parent: Optional[QWidget] = None, title: str = "提示") -> None:
+    def handle_info(message, parent=None, title="信息"):
         """处理信息
         
         Args:
             message: 信息消息
             parent: 父窗口
-            title: 对话框标题
+            title: 信息标题
         """
-        try:
-            # 记录信息日志
-            logger.info(message)
-            
-            # 显示信息对话框
-            QMessageBox.information(
-                parent,
-                title,
-                message
-            )
-            
-        except Exception as e:
-            logger.error(f"处理信息时发生异常: {str(e)}", exc_info=True)
-            
+        # 记录信息
+        logger.info(f"{title}: {message}")
+        
+        # 检查parent参数类型，确保是QWidget或None
+        if parent is not None and not isinstance(parent, QWidget):
+            logger.warning(f"handle_info接收到非QWidget的parent参数: {type(parent)}")
+            parent = None  # 将非法parent设为None
+        
+        # 显示信息对话框
+        if parent:
+            QMessageBox.information(parent, title, message)
+        return True
+    
     @staticmethod
-    def handle_question(message: str, parent: Optional[QWidget] = None, title: str = "确认") -> bool:
-        """处理确认对话框
+    def handle_question(message, parent=None, title="确认"):
+        """处理确认问题
         
         Args:
-            message: 确认消息
+            message: 问题消息
             parent: 父窗口
-            title: 对话框标题
+            title: 问题标题
             
         Returns:
             bool: 是否确认
         """
-        try:
-            # 记录确认日志
-            logger.info(f"用户确认: {message}")
-            
-            # 显示确认对话框
+        # 检查parent参数类型，确保是QWidget或None
+        if parent is not None and not isinstance(parent, QWidget):
+            logger.warning(f"handle_question接收到非QWidget的parent参数: {type(parent)}")
+            parent = None  # 将非法parent设为None
+        
+        # 显示问题对话框
+        if parent:
             reply = QMessageBox.question(
                 parent,
                 title,
                 message,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
             )
+            return reply == QMessageBox.Yes
+        return False
+    
+    @staticmethod
+    def install_global_exception_handler():
+        """安装全局异常处理器"""
+        def exception_hook(exctype, value, tb):
+            """全局异常钩子"""
+            error_msg = ''.join(traceback.format_exception(exctype, value, tb))
+            logger.critical(f"未捕获的异常: {error_msg}")
             
-            return reply == QMessageBox.StandardButton.Yes
+            # 使用QMessageBox显示未捕获的异常
+            try:
+                error_dialog = QMessageBox()
+                error_dialog.setIcon(QMessageBox.Critical)
+                error_dialog.setWindowTitle("系统错误")
+                error_dialog.setText("程序遇到了一个未处理的错误:")
+                error_dialog.setInformativeText(str(value))
+                error_dialog.setDetailedText(error_msg)
+                error_dialog.setStandardButtons(QMessageBox.Ok)
+                error_dialog.exec()
+            except:
+                # 如果GUI显示失败，打印到控制台
+                print(f"严重错误: {error_msg}", file=sys.stderr)
+                
+            # 调用原始的异常处理器
+            sys.__excepthook__(exctype, value, tb)
+        
+        # 设置全局异常钩子
+        sys.excepthook = exception_hook
+        logger.info("已安装全局异常处理器")
+        
+    @staticmethod
+    def try_operation(operation_func, error_msg="操作失败", parent=None, success_msg=None):
+        """尝试执行操作，自动处理异常
+        
+        Args:
+            operation_func: 要执行的操作函数
+            error_msg: 错误提示消息
+            parent: 父窗口
+            success_msg: 成功提示消息
             
+        Returns:
+            result: 操作结果
+        """
+        try:
+            result = operation_func()
+            if success_msg:
+                ErrorHandler.handle_info(success_msg, parent, "成功")
+            return result
         except Exception as e:
-            logger.error(f"处理确认对话框时发生异常: {str(e)}", exc_info=True)
-            return False
-            
+            ErrorHandler.handle_error(e, parent, error_msg)
+            return None
+
     @staticmethod
     def handle_critical(message: str, parent: Optional[QWidget] = None, title: str = "严重错误") -> None:
         """处理严重错误
@@ -482,7 +532,7 @@ class ErrorHandler(QObject):
 请在企业微信后台配置可信任IP：
 1. 访问 https://work.weixin.qq.com/wework_admin/frame#apps/modApiApp
 2. 选择对应的应用
-3. 在"开发者接口"部分找到"IP白名单"
+3. 在"开发者接口"部分找到"企业可信IP"
 4. 添加上述IP地址
 
 配置完成后，请等待5分钟后再试。
@@ -518,7 +568,7 @@ https://work.weixin.qq.com/wework_admin/frame#apps/modApiApp
         copy_btn = dialog.addButton("复制IP", QMessageBox.ButtonRole.ActionRole)
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(ip if ip else ""))
         
-        open_btn = dialog.addButton("配置说明", QMessageBox.ButtonRole.ActionRole)
+        open_btn = dialog.addButton("去配置>>", QMessageBox.ButtonRole.ActionRole)
         open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://work.weixin.qq.com/wework_admin/frame#apps/modApiApp")))
         
         # 修改按钮名称

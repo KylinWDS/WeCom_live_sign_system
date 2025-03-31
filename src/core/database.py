@@ -1,22 +1,21 @@
 import sqlite3
 import os
 import shutil
-from sqlalchemy import create_engine, func
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker, scoped_session, Session
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.exc import SQLAlchemyError
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
+import threading
 from src.utils.logger import get_logger
 from src.models.base import Base
 from src.models import User, UserRole
-from src.models.living import Living, WatchStat
+from src.models.living import Living
 from src.models.live_booking import LiveBooking
 from src.models.live_viewer import LiveViewer
-from src.models.sign_record import SignRecord
-from src.models.sign import Sign
 from contextlib import contextmanager
 from src.config.database import get_default_paths
 from sqlalchemy import inspect
@@ -39,11 +38,32 @@ def get_db_connection_config() -> Dict[str, Any]:
 class DatabaseManager:
     """数据库管理器"""
     
+    # 单例模式支持
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls, *args, **kwargs):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(DatabaseManager, cls).__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
+    
     def __init__(self):
+        # 防止重复初始化
+        if hasattr(self, '_initialized') and self._initialized:
+            return
+            
         self.engine = None
         self.Session = None
         self.initialized = False
         self.db_config = None
+        
+        # 添加会话计数和线程锁
+        self._active_sessions = 0
+        self._session_lock = threading.Lock()
+        
+        self._initialized = True
         
     def initialize(self, db_config: Dict[str, Any]) -> bool:
         """初始化数据库
@@ -97,9 +117,15 @@ class DatabaseManager:
                 echo=self.db_config.get("echo", False)
             )
             
-            # 创建会话工厂
+            # 创建会话工厂 - 兼容SQLAlchemy 2.0的方式
             logger.info("创建会话工厂...")
-            self.Session = scoped_session(sessionmaker(bind=self.engine))
+            self.Session = sessionmaker(
+                autocommit=False,
+                autoflush=True,
+                expire_on_commit=True,
+                class_=Session,
+                bind=self.engine
+            )
             
             # 标记为已初始化
             self.initialized = True
@@ -126,11 +152,9 @@ class DatabaseManager:
             from src.models.user import User
             from src.models.live_booking import LiveBooking
             from src.models.live_viewer import LiveViewer
-            from src.models.sign_record import SignRecord
             from src.models.living import Living
-            from src.models.watch_stat import WatchStat
             from src.models.ip_record import IPRecord
-            from src.models.setting import Setting
+            from src.models.settings import Settings  # 修正设置模型的正确导入
             from src.models.corporation import Corporation
             from src.models.config_change import ConfigChange
             from src.models.operation_log import OperationLog
@@ -179,11 +203,9 @@ class DatabaseManager:
         try:
             # 导入所有模型类，确保它们被注册到Base.metadata中
             from src.models.user import User, UserRole
-            from src.models.living import Living, WatchStat
+            from src.models.living import Living
             from src.models.live_booking import LiveBooking
             from src.models.live_viewer import LiveViewer
-            from src.models.sign_record import SignRecord
-            from src.models.sign import Sign
             
             if force_recreate:
                 # 删除所有表
@@ -244,14 +266,64 @@ class DatabaseManager:
             raise RuntimeError("数据库未初始化")
             
         session = self.Session()
+        
+        # 为Session添加query方法以兼容SQLAlchemy 1.x API
+        if not hasattr(session, 'query'):
+            from sqlalchemy.orm import Query
+            # 正确实现：将entities中的元素展开后传递给Query
+            session.query = lambda *entities, **kwargs: Query(entities[0] if len(entities) == 1 else entities, session=session)
+        
+        # 增加活跃会话计数
+        with self._session_lock:
+            self._active_sessions += 1
+            
         try:
             yield session
             session.commit()
-        except Exception:
+        except Exception as e:
             session.rollback()
+            logger.error(f"会话操作出错: {str(e)}")
             raise
         finally:
             session.close()
+            # 减少活跃会话计数
+            with self._session_lock:
+                self._active_sessions -= 1
+    
+    def get_active_sessions_count(self):
+        """获取当前活跃会话数量
+        
+        Returns:
+            int: 活跃会话数量
+        """
+        with self._session_lock:
+            return self._active_sessions
+    
+    def merge_user(self, session, user_obj):
+        """安全地合并用户对象到当前会话
+        
+        Args:
+            session: 数据库会话
+            user_obj: 用户对象或用户ID
+            
+        Returns:
+            User: 合并后的用户对象或None
+        """
+        if user_obj is None:
+            return None
+            
+        try:
+            from ..models.user import User
+            
+            # 如果传入的是ID，则查询用户对象
+            if isinstance(user_obj, int):
+                return session.query(User).get(user_obj)
+            
+            # 否则合并到当前会话
+            return session.merge(user_obj)
+        except Exception as e:
+            logger.error(f"合并用户对象失败: {str(e)}")
+            return None
     
     def backup(self) -> str:
         """数据库备份
@@ -383,7 +455,7 @@ class DatabaseManager:
                 pool_recycle=self.db_config['pool_recycle'],
                 echo=self.db_config['echo']
             )
-            self.Session = scoped_session(sessionmaker(bind=self.engine))
+            self.Session = sessionmaker(bind=self.engine)
             
             logger.info(f"数据库路径更新成功: {new_path}")
             return True
@@ -494,8 +566,10 @@ class DatabaseManager:
             logger.error(f"获取直播列表失败: {str(e)}")
             raise
     
+    # 注释掉不再使用的 get_all_signs 方法
+    """
     def get_all_signs(self) -> List[Sign]:
-        """获取所有签到记录"""
+        # 获取所有签到记录
         try:
             self.cursor.execute("SELECT * FROM signs ORDER BY sign_time DESC")
             rows = self.cursor.fetchall()
@@ -513,9 +587,17 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"获取签到记录失败: {str(e)}")
             raise
+    """
     
-    def get_live_stats(self) -> Dict[str, Any]:
-        """获取直播统计数据"""
+    def get_live_stats(self, days: int = 30) -> Dict[str, Any]:
+        """获取直播统计数据
+        
+        Args:
+            days: 统计的天数，默认为30天
+            
+        Returns:
+            Dict[str, Any]: 统计结果
+        """
         try:
             stats = {}
             
@@ -576,15 +658,15 @@ class DatabaseManager:
             logger.error(f"获取直播列表失败: {str(e)}")
             raise
     
-    def get_all_sign_records(self) -> List[SignRecord]:
+    def get_all_sign_records(self) -> List[LiveViewer]:
         """获取所有签到记录
         
         Returns:
-            List[SignRecord]: 签到记录列表
+            List[LiveViewer]: 签到记录列表
         """
         try:
             with self.get_session() as session:
-                return session.query(SignRecord).all()
+                return session.query(LiveViewer).filter(LiveViewer.is_signed == True).all()
         except Exception as e:
             logger.error(f"获取签到记录失败: {str(e)}")
             raise
@@ -608,12 +690,12 @@ class DatabaseManager:
             rankings = session.query(
                 Living.id,
                 Living.title,
-                func.count(WatchStat.id).label("watch_count"),
-                func.count(SignRecord.id).label("sign_count")
-            ).outerjoin(WatchStat).outerjoin(SignRecord).filter(
+                func.count(LiveViewer.id).label("watch_count"),
+                func.sum(LiveViewer.is_signed == True).label("sign_count")
+            ).outerjoin(LiveViewer).filter(
                 Living.living_start >= start_date
             ).group_by(Living.id).order_by(
-                func.count(WatchStat.id).desc()
+                func.count(LiveViewer.id).desc()
             ).limit(10).all()
             
             return [
@@ -630,7 +712,7 @@ class DatabaseManager:
             logger.error(f"获取直播排行数据失败: {str(e)}")
             return []
         finally:
-            session.close() 
+            session.close()
     
     def query_one(self, sql: str, params: tuple = None) -> Optional[tuple]:
         """执行SQL查询并返回第一条记录
@@ -664,3 +746,60 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"执行SQL查询失败: {str(e)}")
             raise
+    
+    def get_agent_id_by_user(self, user_id: str) -> int:
+        """根据用户ID获取对应的企业微信应用ID
+        
+        Args:
+            user_id: 用户ID，应该是login_name
+            
+        Returns:
+            int: 企业微信应用ID，如果获取失败则返回默认值
+        """
+        try:
+            with self.get_session() as session:
+                # 使用login_name查找用户
+                from src.models.user import User
+                user = session.query(User).filter_by(login_name=user_id).first()
+                
+                # 如果找到了用户，且用户有agentid
+                if user and user.agentid:
+                    try:
+                        return int(user.agentid)
+                    except (ValueError, TypeError):
+                        logger.warning(f"用户 {user_id} 的agentid '{user.agentid}'不是有效的整数")
+                
+                # 如果找到了用户，且用户有corpid，则尝试获取对应企业的agentid
+                if user and user.corpid:
+                    from src.models.corporation import Corporation
+                    corp = session.query(Corporation).filter_by(corp_id=user.corpid).first()
+                    if corp and corp.agent_id:
+                        try:
+                            return int(corp.agent_id)
+                        except (ValueError, TypeError):
+                            logger.warning(f"企业 {user.corpid} 的agent_id '{corp.agent_id}'不是有效的整数")
+                
+                # 如果找到了用户，且用户有corpname，则尝试获取对应企业的agentid
+                if user and user.corpname:
+                    from src.models.corporation import Corporation
+                    corp = session.query(Corporation).filter_by(name=user.corpname).first()
+                    if corp and corp.agent_id:
+                        try:
+                            return int(corp.agent_id)
+                        except (ValueError, TypeError):
+                            logger.warning(f"企业 {user.corpname} 的agent_id '{corp.agent_id}'不是有效的整数")
+                
+                # 如果以上方法都失败，则获取当前激活的企业的agentid
+                from src.models.corporation import Corporation
+                corp = session.query(Corporation).filter_by(status=1).first()
+                if corp and corp.agent_id:
+                    try:
+                        return int(corp.agent_id)
+                    except (ValueError, TypeError):
+                        logger.warning(f"当前激活企业的agent_id '{corp.agent_id}'不是有效的整数")
+                
+                # 如果所有方法都失败，返回默认值
+                return 1000002  # 默认企业微信应用ID
+        except Exception as e:
+            logger.error(f"获取用户对应的企业微信应用ID失败: {str(e)}")
+            return 1000002  # 出错时返回默认ID

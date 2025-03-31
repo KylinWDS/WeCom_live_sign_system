@@ -1,19 +1,21 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QLabel, QLineEdit, QTableWidget, QTableWidgetItem,
                              QMessageBox, QComboBox, QDialog, QFormLayout,
-                             QHeaderView, QFileDialog, QGroupBox, QCheckBox)
+                             QHeaderView, QFileDialog, QGroupBox, QCheckBox, QAbstractItemView)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from ..managers.style import StyleManager
 from ..utils.widget_utils import WidgetUtils
-from utils.logger import get_logger
+from src.utils.logger import get_logger
 from ..managers.animation import AnimationManager
-from utils.performance_manager import PerformanceManager
-from utils.error_handler import ErrorHandler
-from core.database import DatabaseManager
-from models.corp import Corp
+from src.utils.performance_manager import PerformanceManager
+from src.utils.error_handler import ErrorHandler
+from src.core.database import DatabaseManager
+from src.models.corporation import Corporation as Corp
+from src.core.auth_manager import AuthManager
 import pandas as pd
 import os
+from datetime import datetime
 
 logger = get_logger(__name__)
 
@@ -36,7 +38,7 @@ class CorpDialog(QDialog):
         # 企业名称
         self.corp_name = QLineEdit()
         if self.corp_data:
-            self.corp_name.setText(self.corp_data["corp_name"])
+            self.corp_name.setText(self.corp_data["name"])
         WidgetUtils.set_input_style(self.corp_name)
         layout.addRow("企业名称:", self.corp_name)
         
@@ -52,7 +54,6 @@ class CorpDialog(QDialog):
         self.corp_secret = QLineEdit()
         if self.corp_data:
             self.corp_secret.setText(self.corp_data["corp_secret"])
-        self.corp_secret.setEchoMode(QLineEdit.EchoMode.Password)
         WidgetUtils.set_input_style(self.corp_secret)
         layout.addRow("企业应用Secret:", self.corp_secret)
         
@@ -76,7 +77,7 @@ class CorpDialog(QDialog):
         
         save_btn = QPushButton("保存")
         save_btn.setObjectName("primaryButton")
-        save_btn.clicked.connect(self.accept)
+        save_btn.clicked.connect(self.validate_and_accept)
         btn_layout.addWidget(save_btn)
         
         cancel_btn = QPushButton("取消")
@@ -86,6 +87,27 @@ class CorpDialog(QDialog):
         
         layout.addRow("", btn_layout)
         
+    def validate_and_accept(self):
+        """验证输入并接受"""
+        # 验证必填字段
+        if not self.corp_name.text():
+            ErrorHandler.handle_warning("企业名称不能为空", self)
+            return
+        
+        if not self.corp_id.text():
+            ErrorHandler.handle_warning("企业ID不能为空", self)
+            return
+            
+        if not self.corp_secret.text():
+            ErrorHandler.handle_warning("企业应用Secret不能为空", self)
+            return
+            
+        if not self.agent_id.text():
+            ErrorHandler.handle_warning("应用ID不能为空", self)
+            return
+            
+        self.accept()
+        
     def get_data(self) -> dict:
         """获取表单数据
         
@@ -93,7 +115,7 @@ class CorpDialog(QDialog):
             表单数据
         """
         return {
-            "corp_name": self.corp_name.text(),
+            "name": self.corp_name.text(),
             "corp_id": self.corp_id.text(),
             "corp_secret": self.corp_secret.text(),
             "agent_id": self.agent_id.text(),
@@ -103,9 +125,11 @@ class CorpDialog(QDialog):
 class CorpManagePage(QWidget):
     """企业管理页面"""
     
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager, auth_manager=None, user_id=None):
         super().__init__()
         self.db_manager = db_manager
+        self.auth_manager = auth_manager
+        self.user_id = user_id
         self.performance_manager = PerformanceManager()
         self.error_handler = ErrorHandler()
         self.init_ui()
@@ -130,10 +154,19 @@ class CorpManagePage(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
-            "企业ID", "企业名称", "企业微信ID", "企业微信密钥",
-            "企业微信Token", "企业微信EncodingAESKey", "操作"
+            "企业ID", "企业名称", "应用ID", "企业应用Secret",
+            "状态", "创建时间", "操作"
         ])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        # 修改表格的滚动模式，支持水平滚动
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        # 设置最后一列（操作列）的宽度固定
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Fixed)
+        self.table.setColumnWidth(6, 180)  # 增加操作列的宽度为180像素
+        
+        # 增加行高设置
+        self.table.verticalHeader().setDefaultSectionSize(50)  # 增加默认行高为50像素
+        
         WidgetUtils.set_table_style(self.table)
         layout.addWidget(self.table)
         
@@ -202,50 +235,26 @@ class CorpManagePage(QWidget):
         return toolbar
         
     def _create_search_group(self) -> QGroupBox:
-        """创建搜索区域"""
-        group = QGroupBox("搜索条件")
-        layout = QVBoxLayout(group)
-        layout.setSpacing(10)
+        """创建搜索区域
         
-        # 第一行
-        row1_layout = QHBoxLayout()
+        Returns:
+            搜索区域组控件
+        """
+        group = QGroupBox("搜索条件")
+        layout = QHBoxLayout(group)
         
         # 企业名称
-        row1_layout.addWidget(QLabel("企业名称:"))
+        layout.addWidget(QLabel("企业名称:"))
         self.corp_name = QLineEdit()
+        self.corp_name.setPlaceholderText("请输入企业名称")
         WidgetUtils.set_input_style(self.corp_name)
-        row1_layout.addWidget(self.corp_name)
-        
-        # 企业微信ID
-        row1_layout.addWidget(QLabel("企业微信ID:"))
-        self.corp_id = QLineEdit()
-        WidgetUtils.set_input_style(self.corp_id)
-        row1_layout.addWidget(self.corp_id)
-        
-        layout.addLayout(row1_layout)
-        
-        # 第二行
-        row2_layout = QHBoxLayout()
-        
-        # 企业微信密钥
-        row2_layout.addWidget(QLabel("企业微信密钥:"))
-        self.corp_secret = QLineEdit()
-        WidgetUtils.set_input_style(self.corp_secret)
-        row2_layout.addWidget(self.corp_secret)
-        
-        # 企业微信Token
-        row2_layout.addWidget(QLabel("企业微信Token:"))
-        self.corp_token = QLineEdit()
-        WidgetUtils.set_input_style(self.corp_token)
-        row2_layout.addWidget(self.corp_token)
+        layout.addWidget(self.corp_name)
         
         # 搜索按钮
         search_btn = QPushButton("搜索")
-        search_btn.setObjectName("primaryButton")
+        search_btn.setObjectName("secondaryButton")
         search_btn.clicked.connect(self.search)
-        row2_layout.addWidget(search_btn)
-        
-        layout.addLayout(row2_layout)
+        layout.addWidget(search_btn)
         
         return group
         
@@ -258,17 +267,8 @@ class CorpManagePage(QWidget):
                 query = session.query(Corp)
                 
                 # 应用搜索条件
-                if self.corp_name.text():
-                    query = query.filter(Corp.corp_name.like(f"%{self.corp_name.text()}%"))
-                    
-                if self.corp_id.text():
-                    query = query.filter_by(corp_id=self.corp_id.text())
-                    
-                if self.corp_secret.text():
-                    query = query.filter_by(corp_secret=self.corp_secret.text())
-                    
-                if self.corp_token.text():
-                    query = query.filter_by(corp_token=self.corp_token.text())
+                if hasattr(self, 'corp_name') and self.corp_name.text():
+                    query = query.filter(Corp.name.like(f"%{self.corp_name.text()}%"))
                     
                 # 计算总页数
                 total = query.count()
@@ -277,29 +277,76 @@ class CorpManagePage(QWidget):
                 # 获取当前页数据
                 records = query.offset((self.current_page - 1) * self.page_size).limit(self.page_size).all()
                 
-            # 更新表格
-            self.table.setRowCount(len(records))
-            for row, record in enumerate(records):
-                self.table.setItem(row, 0, QTableWidgetItem(record.corp_id))
-                self.table.setItem(row, 1, QTableWidgetItem(record.corp_name))
-                self.table.setItem(row, 2, QTableWidgetItem(record.agent_id))
-                self.table.setItem(row, 3, QTableWidgetItem(record.corp_secret))
-                self.table.setItem(row, 4, QTableWidgetItem(record.corp_token))
-                self.table.setItem(row, 5, QTableWidgetItem(record.corp_encoding_aes_key))
+                # 在会话范围内准备表格数据
+                table_data = []
+                for record in records:
+                    # 在会话内获取数据
+                    corp_id = record.corp_id
+                    name = record.name
+                    agent_id = record.agent_id
+                    corp_secret = record.corp_secret
+                    status = record.status
+                    created_at = record.created_at
+                    updated_at = record.updated_at
+                    
+                    # 脱敏处理企业密钥
+                    if corp_secret and len(corp_secret) > 8:
+                        masked_secret = corp_secret[:4] + '*' * (len(corp_secret) - 8) + corp_secret[-4:]
+                    else:
+                        masked_secret = '****' if corp_secret else ''
+                    
+                    # 保存企业数据
+                    table_data.append({
+                        'id': getattr(record, 'id', None),
+                        'corp_id': corp_id,
+                        'name': name,
+                        'agent_id': agent_id,
+                        'corp_secret': corp_secret,  # 保存原始值用于编辑
+                        'masked_secret': masked_secret,  # 保存脱敏值用于显示
+                        'status': status,
+                        'created_at': created_at,
+                        'updated_at': updated_at
+                    })
+            
+            # 会话已关闭，使用从会话中提取的数据更新表格
+            self.table.setRowCount(len(table_data))
+            for row, data in enumerate(table_data):
+                self.table.setItem(row, 0, QTableWidgetItem(data['corp_id']))
+                self.table.setItem(row, 1, QTableWidgetItem(data['name']))
+                self.table.setItem(row, 2, QTableWidgetItem(data['agent_id']))
+                self.table.setItem(row, 3, QTableWidgetItem(data['masked_secret']))  # 显示脱敏值
+                
+                # 状态列
+                status_text = "启用" if data['status'] else "禁用"
+                self.table.setItem(row, 4, QTableWidgetItem(status_text))
+                
+                # 创建时间
+                created_at = ""
+                if data['created_at']:
+                    if isinstance(data['created_at'], datetime):
+                        created_at = data['created_at'].strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        created_at = str(data['created_at'])
+                self.table.setItem(row, 5, QTableWidgetItem(created_at))
                 
                 # 操作按钮
                 btn_widget = QWidget()
-                btn_layout = QHBoxLayout(btn_widget)
-                btn_layout.setContentsMargins(0, 0, 0, 0)
+                btn_layout = QHBoxLayout(btn_widget)  # 使用水平布局，与用户管理页面一致
+                btn_layout.setContentsMargins(0, 0, 0, 0)  # 减少边距
                 
                 edit_btn = QPushButton("编辑")
                 edit_btn.setObjectName("linkButton")
-                edit_btn.clicked.connect(lambda checked, r=record: self.edit_corp(r))
+                # 直接设置样式确保按钮可见，与用户管理页面样式一致
+                edit_btn.setStyleSheet("background-color: #f0f0f0; color: #000000; border: 1px solid #cccccc; border-radius: 4px; padding: 4px 12px; min-width: 60px;")
+                corp_id = data['corp_id']
+                edit_btn.clicked.connect(lambda checked, cid=corp_id: self._edit_corp_by_id(cid))
                 btn_layout.addWidget(edit_btn)
                 
                 delete_btn = QPushButton("删除")
                 delete_btn.setObjectName("linkButton")
-                delete_btn.clicked.connect(lambda checked, r=record: self.delete_corp(r))
+                # 直接设置样式确保按钮可见，与用户管理页面样式一致
+                delete_btn.setStyleSheet("background-color: #f0f0f0; color: #000000; border: 1px solid #cccccc; border-radius: 4px; padding: 4px 12px; min-width: 60px;")
+                delete_btn.clicked.connect(lambda checked, cid=corp_id: self._delete_corp_by_id(cid))
                 btn_layout.addWidget(delete_btn)
                 
                 self.table.setCellWidget(row, 6, btn_widget)
@@ -311,7 +358,40 @@ class CorpManagePage(QWidget):
             
         except Exception as e:
             ErrorHandler.handle_error(e, self, "加载企业列表失败")
-            
+    
+    def _edit_corp_by_id(self, corp_id):
+        """通过企业ID编辑企业
+        
+        Args:
+            corp_id: 企业ID
+        """
+        try:
+            with self.db_manager.get_session() as session:
+                corp = session.query(Corp).filter_by(corp_id=corp_id).first()
+                if corp:
+                    # 使用企业对象副本，避免依赖于会话外的对象
+                    self.edit_corp(corp)
+                else:
+                    ErrorHandler.handle_warning("企业不存在", self)
+        except Exception as e:
+            ErrorHandler.handle_error(e, self, "编辑企业失败")
+    
+    def _delete_corp_by_id(self, corp_id):
+        """通过企业ID删除企业
+        
+        Args:
+            corp_id: 企业ID
+        """
+        try:
+            with self.db_manager.get_session() as session:
+                corp = session.query(Corp).filter_by(corp_id=corp_id).first()
+                if corp:
+                    self.delete_corp(corp)
+                else:
+                    ErrorHandler.handle_warning("企业不存在", self)
+        except Exception as e:
+            ErrorHandler.handle_error(e, self, "删除企业失败")
+        
     def search(self):
         """搜索"""
         self.current_page = 1
@@ -333,6 +413,13 @@ class CorpManagePage(QWidget):
     def add_corp(self):
         """添加企业"""
         try:
+            # 检查权限
+            if self.auth_manager and self.user_id:
+                with self.db_manager.get_session() as session:
+                    if not self.auth_manager.has_permission(self.user_id, "manage_corps", session):
+                        self.error_handler.handle_warning("您没有权限执行此操作", self)
+                        return
+            
             # 创建企业对话框
             dialog = CorpDialog()
             if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -344,7 +431,12 @@ class CorpManagePage(QWidget):
                     if session.query(Corp).filter_by(corp_id=corp_info["corp_id"]).first():
                         ErrorHandler.handle_warning("企业ID已存在", self)
                         return
-                        
+                    
+                    # 验证必填字段
+                    if not corp_info["name"] or not corp_info["corp_id"]:
+                        ErrorHandler.handle_warning("请填写企业名称和企业ID", self)
+                        return
+                    
                     # 创建企业
                     corp = Corp(**corp_info)
                     session.add(corp)
@@ -364,22 +456,40 @@ class CorpManagePage(QWidget):
             corp: 企业信息
         """
         try:
-            # 创建企业对话框
-            dialog = CorpDialog({
-                "corp_name": corp.corp_name,
-                "corp_id": corp.corp_id,
-                "corp_secret": corp.corp_secret,
-                "agent_id": corp.agent_id,
-                "corp_token": corp.corp_token,
-                "corp_encoding_aes_key": corp.corp_encoding_aes_key
-            })
+            # 检查权限
+            if self.auth_manager and self.user_id:
+                with self.db_manager.get_session() as session:
+                    if not self.auth_manager.has_permission(self.user_id, "manage_corps", session):
+                        self.error_handler.handle_warning("您没有权限执行此操作", self)
+                        return
+            
+            # 创建企业对话框，使用企业数据的副本而不是SQLAlchemy对象
+            corp_data = {
+                "name": getattr(corp, 'name', ''),
+                "corp_id": getattr(corp, 'corp_id', ''),
+                "corp_secret": getattr(corp, 'corp_secret', ''),
+                "agent_id": getattr(corp, 'agent_id', ''),
+                "status": getattr(corp, 'status', True)
+            }
+            
+            dialog = CorpDialog(corp_data)
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 # 获取企业信息
                 corp_info = dialog.get_data()
                 
                 # 更新企业信息
                 with self.db_manager.get_session() as session:
-                    session.query(Corp).filter_by(corp_id=corp.corp_id).update(corp_info)
+                    # 获取数据库中的企业
+                    db_corp = session.query(Corp).filter_by(corp_id=corp_data["corp_id"]).first()
+                    if not db_corp:
+                        ErrorHandler.handle_warning("企业不存在", self)
+                        return
+                    
+                    # 更新所有字段
+                    for key, value in corp_info.items():
+                        if key != "corp_id":  # 不更新主键
+                            setattr(db_corp, key, value)
+                    
                     session.commit()
                     
                 ErrorHandler.handle_info("编辑企业成功", self, "成功")
@@ -396,22 +506,39 @@ class CorpManagePage(QWidget):
             corp: 企业信息
         """
         try:
-            # 确认删除
-            if not ErrorHandler.handle_question(
-                "确定要删除该企业吗？",
-                self,
-                "确认删除"
-            ):
-                return
-                
-            # 删除企业
-            with self.db_manager.get_session() as session:
-                session.query(Corp).filter_by(corp_id=corp.corp_id).delete()
-                session.commit()
-                
-            ErrorHandler.handle_info("删除企业成功", self, "成功")
-            self.load_data()
+            # 检查权限
+            if self.auth_manager and self.user_id:
+                with self.db_manager.get_session() as session:
+                    if not self.auth_manager.has_permission(self.user_id, "manage_corps", session):
+                        self.error_handler.handle_warning("您没有权限执行此操作", self)
+                        return
             
+            # 确认删除
+            from PySide6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self, "确认删除", 
+                f"确定要删除企业 {corp.name} 吗？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                # 获取企业ID
+                corp_id = corp.corp_id
+                
+                with self.db_manager.get_session() as session:
+                    # 找到要删除的企业
+                    db_corp = session.query(Corp).filter_by(corp_id=corp_id).first()
+                    if not db_corp:
+                        ErrorHandler.handle_warning("企业不存在", self)
+                        return
+                    
+                    session.delete(db_corp)
+                    session.commit()
+                    
+                ErrorHandler.handle_info("删除企业成功", self, "成功")
+                self.load_data()
+                
         except Exception as e:
             ErrorHandler.handle_error(e, self, "删除企业失败")
             
@@ -419,6 +546,13 @@ class CorpManagePage(QWidget):
     def export_data(self):
         """导出数据"""
         try:
+            # 检查权限
+            if self.auth_manager and self.user_id:
+                with self.db_manager.get_session() as session:
+                    if not self.auth_manager.has_permission(self.user_id, "export_data", session):
+                        self.error_handler.handle_warning("您没有权限执行此操作", self)
+                        return
+            
             # 选择保存路径
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
@@ -429,24 +563,35 @@ class CorpManagePage(QWidget):
             if not file_path:
                 return
                 
-            # 获取所有企业记录
+            # 获取所有企业记录，并准备导出数据
+            corp_data = []
             with self.db_manager.get_session() as session:
-                records = session.query(Corp).all()
+                corps = session.query(Corp).all()
                 
-            # 创建DataFrame
-            data = []
-            for record in records:
-                data.append({
-                    "企业名称": record.corp_name,
-                    "企业ID": record.corp_id,
-                    "应用ID": record.agent_id,
-                    "企业微信密钥": record.corp_secret,
-                    "企业微信Token": record.corp_token,
-                    "企业微信EncodingAESKey": record.corp_encoding_aes_key
-                })
-            df = pd.DataFrame(data)
+                # 在会话内处理数据
+                for corp in corps:
+                    # 脱敏处理企业密钥
+                    corp_secret = corp.corp_secret
+                    if corp_secret and len(corp_secret) > 8:
+                        masked_secret = corp_secret[:4] + '*' * (len(corp_secret) - 8) + corp_secret[-4:]
+                    else:
+                        masked_secret = '****' if corp_secret else ''
+                    
+                    created_at_str = corp.created_at.strftime("%Y-%m-%d %H:%M:%S") if corp.created_at else ''
+                    updated_at_str = corp.updated_at.strftime("%Y-%m-%d %H:%M:%S") if corp.updated_at else ''
+                    
+                    corp_data.append({
+                        "企业名称": corp.name,
+                        "企业ID": corp.corp_id,
+                        "应用ID": corp.agent_id,
+                        "企业微信密钥": masked_secret,  # 导出时也脱敏
+                        "状态": "启用" if corp.status else "禁用",
+                        "创建时间": created_at_str,
+                        "更新时间": updated_at_str
+                    })
             
-            # 导出到Excel
+            # 创建DataFrame并导出
+            df = pd.DataFrame(corp_data)
             df.to_excel(file_path, index=False)
             
             ErrorHandler.handle_info("导出数据成功", self, "成功")

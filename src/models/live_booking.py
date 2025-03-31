@@ -54,7 +54,8 @@ class LiveBooking(BaseModel):
     push_stream_url = Column(String(500), nullable=True, comment="推流地址")
     
     # 关联
-    viewers = relationship("LiveViewer", back_populates="live_booking", lazy="dynamic", cascade="all, delete-orphan")
+    viewers = relationship("LiveViewer", back_populates="live_booking", lazy="dynamic", cascade="all, delete-orphan", overlaps="viewers_old")
+    viewers_old = relationship("LiveViewer", foreign_keys="LiveViewer.live_booking_id", back_populates="live_booking", overlaps="viewers", viewonly=True)
     
     def to_dict(self) -> dict:
         """转换为字典"""

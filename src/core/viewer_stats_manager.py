@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from src.models.live_viewer import LiveViewer
-from src.models.sign_record import SignRecord
+from src.models.live_viewer import LiveViewer
 from src.utils.logger import get_logger
 from src.utils.cache import Cache
 
@@ -158,8 +158,9 @@ class ViewerStatsManager:
                 ).all()
                 
                 # 获取签到记录
-                sign_records = session.query(SignRecord).filter_by(
-                    living_id=living_id
+                sign_records = session.query(LiveViewer).filter_by(
+                    living_id=living_id,
+                    is_signed=True
                 ).all()
                 
                 # 构建用户画像数据
@@ -213,8 +214,9 @@ class ViewerStatsManager:
                 ).all()
                 
                 # 获取签到记录
-                sign_records = session.query(SignRecord).filter_by(
-                    living_id=living_id
+                sign_records = session.query(LiveViewer).filter_by(
+                    living_id=living_id,
+                    is_signed=True
                 ).all()
                 
                 # 按部门统计
@@ -264,9 +266,10 @@ class ViewerStatsManager:
             
         try:
             with self.db_manager.get_session() as session:
-                # 使用批量查询
-                records = session.query(SignRecord).filter_by(
-                    living_id=living_id
+                # 使用批量查询获取已签到的观众
+                records = session.query(LiveViewer).filter_by(
+                    living_id=living_id,
+                    is_signed=True
                 ).yield_per(self.batch_size)
                 
                 # 使用pandas高效处理
@@ -274,7 +277,7 @@ class ViewerStatsManager:
                 for record in records:
                     data.append({
                         "用户ID": record.user_id,
-                        "用户名": record.user_name,
+                        "用户名": record.username,
                         "签到时间": record.sign_time,
                         "签到类型": "正常签到" if record.sign_type == 1 else "补签",
                         "签到状态": "有效" if record.sign_status == 1 else "无效"

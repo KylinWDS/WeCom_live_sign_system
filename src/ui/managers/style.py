@@ -15,66 +15,265 @@ class StyleManager:
             str: 样式表
         """
         return """
-            QMainWindow {
-                background-color: #f5f5f5;
-            }
-            QPushButton {
-                padding: 8px 16px;
-                border-radius: 4px;
-                border: none;
+            /* 全局样式 */
+            QWidget {
+                font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
                 font-size: 14px;
-                background-color: #1890ff;
+            }
+            
+            /* 左侧菜单样式 */
+            #leftMenu {
+                background-color: #2c3e50;
+                min-width: 160px;
+                max-width: 160px;
+            }
+            
+            #menuButton {
+                background-color: transparent;
+                color: #ecf0f1;
+                border: none;
+                padding: 15px;
+                text-align: left;
+                font-size: 15px;
+            }
+            
+            #menuButton:hover {
+                background-color: #34495e;
+            }
+            
+            #menuButton:pressed {
+                background-color: #1abc9c;
+            }
+            
+            #dangerButton {
+                background-color: #e74c3c;
                 color: white;
+                border: none;
+                padding: 15px;
+                text-align: center;
+                font-size: 15px;
+                border-radius: 4px;
+                margin: 10px;
             }
-            QPushButton:hover {
-                background-color: #40a9ff;
+            
+            #dangerButton:hover {
+                background-color: #c0392b;
             }
-            QPushButton:pressed {
-                background-color: #096dd9;
+            
+            /* 仪表盘样式 */
+            #welcomeFrame {
+                background-color: #f8f9fa;
+                border-radius: 8px;
+                padding: 15px;
+                margin-bottom: 15px;
             }
-            QPushButton:disabled {
-                background-color: #d9d9d9;
+            
+            #welcomeLabel {
+                font-size: 24px;
+                font-weight: bold;
+                color: #2c3e50;
+            }
+            
+            #timeLabel {
+                font-size: 14px;
+                color: #7f8c8d;
+            }
+            
+            #statusFrame {
+                margin-bottom: 15px;
+            }
+            
+            #infoCard {
+                background-color: white;
+                border-radius: 8px;
+                padding: 15px;
+                margin: 5px;
+                border: 1px solid #e0e0e0;
+            }
+            
+            #infoCard:hover {
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            }
+            
+            #cardTitle {
+                font-size: 16px;
+                color: #7f8c8d;
+                margin-bottom: 5px;
+            }
+            
+            #linksFrame {
+                background-color: #f8f9fa;
+                border-radius: 8px;
+                padding: 15px;
+                margin-bottom: 15px;
+            }
+            
+            #dashboardButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 15px;
+                font-size: 15px;
+            }
+            
+            #dashboardButton:hover {
+                background-color: #2980b9;
+            }
+            
+            #recentFrame {
+                background-color: white;
+                border-radius: 8px;
+                padding: 15px;
+                margin-bottom: 15px;
+                border: 1px solid #e0e0e0;
+            }
+            
+            #sectionTitle {
+                font-size: 18px;
+                font-weight: bold;
+                color: #2c3e50;
+                margin-bottom: 10px;
+            }
+            
+            #versionLabel {
+                font-size: 12px;
+                color: #95a5a6;
+            }
+            
+            /* 标签页样式 */
+            QTabWidget::pane {
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                background-color: white;
+            }
+            
+            QTabBar::tab {
+                background-color: #f0f0f0;
+                border: 1px solid #d0d0d0;
+                border-bottom: none;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                padding: 8px 12px;
+                margin-right: 2px;
+            }
+            
+            QTabBar::tab:selected {
+                background-color: white;
+                border-bottom: 1px solid white;
+            }
+            
+            QTabBar::tab:hover:!selected {
+                background-color: #e0e0e0;
+            }
+            
+            /* 主要按钮样式 */
+            #primaryButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 15px;
+            }
+            
+            #primaryButton:hover {
+                background-color: #2980b9;
+            }
+            
+            /* 次要按钮样式 */
+            #secondaryButton {
+                background-color: #f8f9fa;
+                color: #333333;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 8px 15px;
+            }
+            
+            #secondaryButton:hover {
+                background-color: #e9ecef;
+            }
+            
+            /* 链接按钮样式 */
+            #linkButton {
+                background-color: #f0f0f0;
+                border: 1px solid #cccccc;
+                border-radius: 4px;
+                padding: 4px 12px;
+                text-decoration: none;
+                min-width: 60px;
+                color: #000000;
+            }
+            
+            #linkButton:hover {
+                background-color: #e0e0e0;
+                color: #000000;
+            }
+            
+            #linkButton:disabled {
                 color: #999999;
             }
-            QLabel {
-                font-size: 14px;
-                color: #333333;
+            
+            /* 确保linkButton文字在所有状态下都可见 */
+            QPushButton#linkButton {
+                color: #3498db !important;
+                min-width: 60px;
+                margin: 0 2px;
             }
-            QLineEdit {
-                padding: 8px;
-                border: 1px solid #d9d9d9;
-                border-radius: 4px;
-                font-size: 14px;
+            
+            QPushButton#linkButton:hover {
+                color: #2980b9 !important;
             }
-            QLineEdit:focus {
-                border-color: #1890ff;
+            
+            QPushButton#linkButton:disabled {
+                color: #95a5a6 !important;
             }
-            QComboBox {
-                padding: 8px;
-                border: 1px solid #d9d9d9;
-                border-radius: 4px;
-                font-size: 14px;
+            
+            /* 状态栏样式 */
+            QStatusBar {
+                background-color: #f8f9fa;
+                color: #7f8c8d;
+                border-top: 1px solid #e0e0e0;
+                padding: 3px;
+                min-height: 25px;
             }
-            QComboBox:focus {
-                border-color: #1890ff;
-            }
-            QTableWidget {
-                border: 1px solid #d9d9d9;
-                border-radius: 4px;
-                font-size: 14px;
-            }
-            QTableWidget::item {
-                padding: 8px;
-            }
-            QTableWidget::item:selected {
-                background-color: #e6f7ff;
-                color: #1890ff;
-            }
-            QHeaderView::section {
-                background-color: #fafafa;
-                padding: 8px;
-                border: 1px solid #d9d9d9;
+            
+            #statusCorpLabel {
+                font-size: 12px;
+                color: #3498db;
+                padding-left: 10px;
                 font-weight: bold;
+            }
+            
+            #statusUserLabel {
+                font-size: 12px;
+                color: #2c3e50;
+                font-weight: bold;
+            }
+            
+            #disclaimerLabel {
+                font-size: 11px;
+                color: #95a5a6;
+                padding-right: 10px;
+                font-style: italic;
+            }
+            
+            /* 工具栏样式 */
+            QToolBar {
+                background-color: #f8f9fa;
+                border: none;
+                spacing: 10px;
+                padding: 5px;
+            }
+            
+            QToolButton {
+                background-color: transparent;
+                border: none;
+                border-radius: 4px;
+                padding: 5px;
+            }
+            
+            QToolButton:hover {
+                background-color: #e0e0e0;
             }
         """
     
@@ -331,57 +530,155 @@ class StyleManager:
     
     @staticmethod
     def get_login_style() -> str:
-        """获取登录窗口样式
+        """获取登录页面样式
         
         Returns:
             str: 样式表
         """
         return """
-            QMainWindow {
+            /* 登录页面样式 */
+            #loginPage {
+                background-color: #ecf0f1;
+            }
+            
+            #loginForm {
+                background-color: white;
+                border-radius: 8px;
+                padding: 30px;
+                min-width: 400px;
+                max-width: 450px;
+                border: 1px solid #e0e0e0;
+            }
+            
+            #loginTitle {
+                font-size: 24px;
+                font-weight: bold;
+                color: #2c3e50;
+                margin-bottom: 20px;
+                text-align: center;
+            }
+            
+            #loginInput {
+                border: 1px solid #bdc3c7;
+                border-radius: 4px;
+                padding: 10px;
+                margin-bottom: 15px;
+                font-size: 16px;
+            }
+            
+            #loginButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 12px;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            
+            #loginButton:hover {
+                background-color: #2980b9;
+            }
+            
+            #errorLabel {
+                color: #e74c3c;
+                font-size: 14px;
+                margin-top: 10px;
+            }
+            
+            #versionLabel {
+                color: #95a5a6;
+                font-size: 12px;
+                margin-top: 20px;
+                text-align: center;
+            }
+        """
+    
+    @staticmethod
+    def get_settings_style() -> str:
+        """获取设置页面样式
+        
+        Returns:
+            str: 样式表
+        """
+        return """
+            /* 设置页面样式 */
+            #settingsPage {
                 background-color: #ffffff;
             }
-            QLabel {
-                font-size: 14px;
-                color: #333333;
+            
+            #settingsForm {
+                background-color: white;
+                border-radius: 8px;
+                padding: 20px;
+                border: 1px solid #e0e0e0;
             }
-            QLineEdit {
+            
+            #settingsTitle {
+                font-size: 20px;
+                font-weight: bold;
+                color: #2c3e50;
+                margin-bottom: 15px;
+            }
+            
+            #settingsSection {
+                font-size: 16px;
+                font-weight: bold;
+                color: #34495e;
+                margin-top: 20px;
+                margin-bottom: 10px;
+            }
+            
+            #settingsLabel {
+                font-size: 14px;
+                color: #2c3e50;
+            }
+            
+            #settingsInput {
+                border: 1px solid #bdc3c7;
+                border-radius: 4px;
                 padding: 8px;
-                border: 1px solid #d9d9d9;
-                border-radius: 4px;
                 font-size: 14px;
-                min-width: 200px;
             }
-            QLineEdit:focus {
-                border-color: #1890ff;
-            }
-            QComboBox {
-                padding: 8px;
-                border: 1px solid #d9d9d9;
-                border-radius: 4px;
-                font-size: 14px;
-                min-width: 200px;
-            }
-            QComboBox:focus {
-                border-color: #1890ff;
-            }
-            QPushButton {
-                padding: 8px 16px;
-                border-radius: 4px;
-                border: none;
-                font-size: 14px;
-                background-color: #1890ff;
+            
+            #settingsButton {
+                background-color: #3498db;
                 color: white;
-                min-width: 100px;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 15px;
+                font-size: 14px;
             }
-            QPushButton:hover {
-                background-color: #40a9ff;
+            
+            #settingsButton:hover {
+                background-color: #2980b9;
             }
-            QPushButton:pressed {
-                background-color: #096dd9;
+            
+            #saveButton {
+                background-color: #2ecc71;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 15px;
+                font-size: 15px;
+                font-weight: bold;
             }
-            QPushButton:disabled {
-                background-color: #d9d9d9;
-                color: #999999;
+            
+            #saveButton:hover {
+                background-color: #27ae60;
+            }
+            
+            #resetButton {
+                background-color: #e74c3c;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 15px;
+                font-size: 15px;
+            }
+            
+            #resetButton:hover {
+                background-color: #c0392b;
             }
         """
     

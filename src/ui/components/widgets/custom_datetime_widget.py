@@ -529,7 +529,14 @@ class CustomDateTimeWidget(QWidget):
         
     def dateTime(self):
         """获取当前选择的日期时间"""
-        return self._current_datetime 
+        return self._current_datetime
+        
+    def clearDateTime(self):
+        """清除日期时间，重置选择器状态"""
+        self._current_datetime = QDateTime()  # 创建一个空的日期时间对象
+        self._focus_type = None  # 清除焦点
+        self._update_display()  # 更新显示
+        self.dateTimeChanged.emit(self._current_datetime)  # 发送信号通知变化
 
     def setBackgroundColor(self, color):
         """设置背景颜色

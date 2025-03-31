@@ -1,8 +1,9 @@
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union
 from datetime import datetime
 import hashlib
 import json
 import os
+import threading
 from ..utils.logger import get_logger
 from .database import DatabaseManager
 from ..utils.security import (
@@ -17,6 +18,9 @@ logger = get_logger(__name__)
 
 class AuthManager:
     """用户权限管理类"""
+    
+    # 添加线程本地存储用于保存当前用户
+    _thread_local = threading.local()
     
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
@@ -132,39 +136,50 @@ class AuthManager:
             logger.error(f"创建企业管理员账号失败: {str(e)}")
             return False
             
-    def verify_user(self, username: str, password: str) -> Optional[Dict[str, Any]]:
+    def verify_user(self, username: str, password: str, session=None) -> Optional[User]:
         """验证用户
         
         Args:
             username: 用户名
             password: 密码
+            session: 可选的数据库会话
             
         Returns:
-            Optional[Dict[str, Any]]: 用户信息
+            Optional[User]: 验证通过的用户对象或None
         """
         try:
-            # 获取用户信息
-            user = self.db.query_one(
-                "SELECT password_hash, salt, role, is_active FROM users WHERE userid = ?",
-                (username,)
-            )
-            if not user:
-                return None
-                
-            # 验证密码
-            if not verify_password(password, user[0], user[1]):
-                return None
-                
-            # 检查用户状态
-            if not user[3]:
-                return None
-                
-            return {
-                "userid": username,
-                "role": user[2],
-                "is_active": user[3]
-            }
+            # 确定是否需要关闭会话
+            should_close_session = False
             
+            # 如果没有提供会话，创建一个新的
+            if not session:
+                session = self.db.Session()
+                should_close_session = True
+            
+            try:
+                # 查询用户
+                user = session.query(User).filter_by(login_name=username).first()
+                
+                # 如果用户不存在或未激活
+                if not user or not user.is_active:
+                    return None
+                    
+                # 验证密码
+                if not user.verify_password(password):
+                    return None
+                
+                # 更新用户最后活跃时间
+                user.update_last_active_time()
+                session.commit()
+                    
+                # 返回用户对象
+                return user
+                
+            finally:
+                # 如果我们创建了会话，确保关闭它
+                if should_close_session:
+                    session.close()
+                    
         except Exception as e:
             logger.error(f"验证用户失败: {str(e)}")
             return None
@@ -209,30 +224,55 @@ class AuthManager:
             logger.error(f"获取角色权限失败: {str(e)}")
             return []
             
-    def has_permission(self, username: str, permission: str) -> bool:
+    def has_permission(self, user_or_login: Union[str, int, User], permission: str, session=None) -> bool:
         """检查用户是否有权限
         
         Args:
-            username: 用户名
+            user_or_login: 用户对象、用户ID或登录名
             permission: 权限名称
+            session: 可选的数据库会话
             
         Returns:
             bool: 是否有权限
         """
         try:
-            # 从数据库获取用户角色
-            with self.db.get_session() as session:
-                user = session.query(User).filter_by(login_name=username).first()
+            # 确定是否需要关闭会话
+            should_close_session = False
+            
+            # 如果没有提供会话，创建一个新的
+            if not session:
+                session = self.db.Session()
+                should_close_session = True
+            
+            try:
+                # 获取用户对象
+                user = None
+                if isinstance(user_or_login, str):
+                    # 如果是字符串，假定为登录名
+                    user = session.query(User).filter_by(login_name=user_or_login).first()
+                elif isinstance(user_or_login, int):
+                    # 如果是整数，假定为用户ID
+                    user = session.query(User).get(user_or_login)
+                elif hasattr(user_or_login, 'userid'):
+                    # 如果是用户对象，确保与会话绑定
+                    user = session.merge(user_or_login)
+                
                 if not user:
                     return False
                     
-                # 获取角色权限
+                # 超级管理员拥有所有权限
                 if user.role == UserRole.ROOT_ADMIN.value:
-                    return True  # 超级管理员拥有所有权限
+                    return True
                     
+                # 检查普通权限
                 permissions = self.roles.get(user.role, {}).get("permissions", [])
                 return "*" in permissions or permission in permissions
                 
+            finally:
+                # 如果我们创建了会话，确保关闭它
+                if should_close_session:
+                    session.close()
+                    
         except Exception as e:
             logger.error(f"检查用户权限失败: {str(e)}")
             return False
@@ -458,6 +498,79 @@ class AuthManager:
             
         except Exception as e:
             logger.error(f"获取所有角色失败: {str(e)}")
+            return []
+            
+    def get_all_role_permissions(self, session) -> List[Dict]:
+        """获取所有角色的权限信息
+        
+        Args:
+            session: 数据库会话
+        
+        Returns:
+            List[Dict]: 角色权限信息列表
+        """
+        try:
+            result = []
+            
+            # 定义可用的权限列表
+            all_permissions = [
+                {"id": "manage_users", "name": "管理用户", "description": "创建、编辑和删除用户"},
+                {"id": "manage_corps", "name": "管理企业", "description": "创建、编辑和删除企业信息"},
+                {"id": "manage_settings", "name": "管理设置", "description": "修改系统配置和设置"},
+                {"id": "manage_permissions", "name": "管理权限", "description": "分配和修改角色权限"},
+                {"id": "view_lives", "name": "查看直播", "description": "查看直播列表和详情"},
+                {"id": "create_live", "name": "创建直播", "description": "创建新的直播"},
+                {"id": "edit_live", "name": "编辑直播", "description": "编辑现有直播信息"},
+                {"id": "delete_live", "name": "删除直播", "description": "删除直播记录"},
+                {"id": "view_signs", "name": "查看签到", "description": "查看签到记录"},
+                {"id": "export_signs", "name": "导出签到", "description": "导出签到数据"},
+                {"id": "view_stats", "name": "查看统计", "description": "查看数据统计和报表"},
+                {"id": "export_data", "name": "导出数据", "description": "导出系统数据"},
+                {"id": "view_system_monitor", "name": "查看系统监控", "description": "查看系统性能监控"}
+            ]
+            
+            # 获取所有角色
+            roles = self.get_all_roles()
+            
+            # 为每个角色构建权限信息
+            for role in roles:
+                role_perms = []
+                role_id = role["id"]
+                role_permissions = role["permissions"]
+                
+                # 特殊处理超级管理员，拥有所有权限
+                if role_id == UserRole.ROOT_ADMIN.value:
+                    for perm in all_permissions:
+                        role_perms.append({
+                            "id": perm["id"],
+                            "name": perm["name"],
+                            "description": perm["description"],
+                            "allowed": True
+                        })
+                else:
+                    # 处理其他角色
+                    for perm in all_permissions:
+                        # 检查权限是否在角色的权限列表中
+                        allowed = perm["id"] in role_permissions or "*" in role_permissions
+                        
+                        role_perms.append({
+                            "id": perm["id"],
+                            "name": perm["name"],
+                            "description": perm["description"],
+                            "allowed": allowed
+                        })
+                
+                # 添加到结果
+                result.append({
+                    "role_id": role_id,
+                    "role_name": role["name"],
+                    "permissions": role_perms
+                })
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"获取所有角色权限失败: {str(e)}")
             return []
             
     def reset_password(self, username: str) -> bool:
@@ -743,27 +856,253 @@ class AuthManager:
             logger.error(f"设置超级管理员密码失败: {str(e)}")
             return False
 
-    def get_current_user(self) -> Optional[User]:
-        """获取当前登录用户
+    def get_current_user(self, session=None):
+        """获取当前线程的用户
         
+        Args:
+            session: 可选的数据库会话，不再使用
+            
         Returns:
-            Optional[User]: 当前用户对象，如果未登录则返回 None
+            User: 用户对象或None
         """
         try:
-            with self.db.get_session() as session:
-                # 获取最后登录的用户
-                user = session.query(User).order_by(User.last_login.desc()).first()
-                if not user:
-                    return None
-                    
-                # 检查用户是否处于活动状态
-                if not user.is_active:
-                    return None
-                    
-                # 重新加载用户对象以确保所有属性都被加载
-                session.refresh(user)
-                return user
+            # 如果存储了完整用户对象，直接返回
+            if hasattr(self._thread_local, 'user') and self._thread_local.user is not None:
+                return self._thread_local.user
                 
+            # 如果只有用户ID，尝试从数据库获取
+            elif hasattr(self._thread_local, 'user_id') and self._thread_local.user_id is not None:
+                user_id = self._thread_local.user_id
+                
+                # 如果提供了会话，使用它
+                if session:
+                    user = session.query(User).get(user_id)
+                # 否则创建新会话
+                elif self.db:
+                    with self.db.get_session() as new_session:
+                        user = new_session.query(User).get(user_id)
+                        # 如果找到用户，更新存储的用户对象
+                        if user:
+                            self._thread_local.user = user
+                        return user
+                else:
+                    return None
+            else:
+                return None
         except Exception as e:
             logger.error(f"获取当前用户失败: {str(e)}")
+            return None
+    
+    def clear_current_user(self):
+        """清除当前线程的用户"""
+        if hasattr(self._thread_local, 'user'):
+            delattr(self._thread_local, 'user')
+        if hasattr(self._thread_local, 'user_id'):
+            delattr(self._thread_local, 'user_id')
+
+    def update_role_permissions(self, role: str, permissions: list) -> bool:
+        """更新角色权限
+        
+        Args:
+            role: 角色
+            permissions: 权限列表
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            # 不允许修改超级管理员的权限
+            if role == UserRole.ROOT_ADMIN.value:
+                logger.warning("不允许修改超级管理员的权限")
+                return False
+                
+            # 更新内存中的角色权限
+            if role in self.roles:
+                self.roles[role]["permissions"] = permissions
+                
+                # 更新配置文件中的角色权限
+                self.save_config()
+                
+                logger.info(f"更新角色 {role} 权限成功")
+                return True
+            else:
+                logger.warning(f"未找到角色: {role}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"更新角色权限失败: {str(e)}")
+            return False
+            
+    def reset_role_permissions(self, role: str) -> bool:
+        """重置角色权限到默认状态
+        
+        Args:
+            role: 角色
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            # 不允许修改超级管理员的权限
+            if role == UserRole.ROOT_ADMIN.value:
+                logger.warning("不允许修改超级管理员的权限")
+                return False
+                
+            # 重置为默认权限
+            default_permissions = {
+                UserRole.WECOM_ADMIN.value: [
+                    "view_lives",
+                    "create_live",
+                    "edit_live",
+                    "delete_live",
+                    "view_signs", 
+                    "export_signs",
+                    "view_stats"
+                ],
+                UserRole.NORMAL.value: [
+                    "view_lives",
+                    "view_signs",
+                    "view_stats"
+                ]
+            }
+            
+            if role in default_permissions:
+                self.roles[role]["permissions"] = default_permissions[role]
+                
+                # 更新配置文件中的角色权限
+                self.save_config()
+                
+                logger.info(f"重置角色 {role} 权限成功")
+                return True
+            else:
+                logger.warning(f"未找到角色: {role}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"重置角色权限失败: {str(e)}")
+            return False
+    
+    def set_role_permission(self, role_id: str, permission_id: str, allowed: bool, session=None) -> bool:
+        """设置角色的特定权限
+        
+        Args:
+            role_id: 角色ID
+            permission_id: 权限ID
+            allowed: 是否允许
+            session: 数据库会话（可选）
+            
+        Returns:
+            bool: 是否设置成功
+        """
+        try:
+            # 不允许修改超级管理员的权限
+            if role_id == UserRole.ROOT_ADMIN.value:
+                logger.warning("不允许修改超级管理员的权限")
+                return False
+                
+            # 检查角色是否存在
+            if role_id not in self.roles:
+                logger.warning(f"未找到角色: {role_id}")
+                return False
+                
+            # 获取当前权限列表
+            current_permissions = self.roles[role_id]["permissions"]
+            
+            # 根据是否允许更新权限列表
+            if allowed and permission_id not in current_permissions:
+                current_permissions.append(permission_id)
+            elif not allowed and permission_id in current_permissions:
+                current_permissions.remove(permission_id)
+                
+            # 更新角色权限
+            self.roles[role_id]["permissions"] = current_permissions
+            
+            # 保存配置
+            self.save_config()
+            
+            logger.info(f"设置角色 {role_id} 的权限 {permission_id} 为 {allowed} 成功")
+            return True
+                
+        except Exception as e:
+            logger.error(f"设置角色权限失败: {str(e)}")
+            return False
+    
+    def reset_permissions(self, session=None) -> bool:
+        """重置所有角色权限到默认状态
+        
+        Args:
+            session: 数据库会话（可选）
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            # 重置每个角色的权限
+            for role_id in self.roles:
+                if role_id != UserRole.ROOT_ADMIN.value:  # 不重置超级管理员
+                    self.reset_role_permissions(role_id)
+                    
+            logger.info("所有角色权限已重置为默认值")
+            return True
+                
+        except Exception as e:
+            logger.error(f"重置所有权限失败: {str(e)}")
+            return False
+
+    # 添加用户上下文管理方法
+    def set_current_user(self, user):
+        """设置当前线程的用户
+        
+        Args:
+            user: 用户对象或用户ID
+        
+        Returns:
+            bool: 设置是否成功
+        """
+        try:
+            if user is None:
+                self._thread_local.user = None
+                self._thread_local.user_id = None
+                return True
+                
+            # 如果是用户对象
+            if hasattr(user, 'userid'):
+                # 存储完整的用户对象和ID
+                self._thread_local.user = user
+                self._thread_local.user_id = user.userid
+                return True
+            # 如果是用户ID，尝试从数据库获取用户对象
+            else:
+                with self.db.get_session() as session:
+                    user_obj = session.query(User).get(user)
+                    if user_obj:
+                        self._thread_local.user = user_obj
+                        self._thread_local.user_id = user
+                        return True
+                    else:
+                        logger.warning(f"设置当前用户失败: 未找到ID为 {user} 的用户")
+                        return False
+        except Exception as e:
+            logger.error(f"设置当前用户失败: {str(e)}")
+            return False
+    
+    def get_current_user_id(self) -> Optional[int]:
+        """获取当前线程的用户ID
+        
+        Returns:
+            Optional[int]: 用户ID或None
+        """
+        try:
+            # 如果存储了用户ID，直接返回
+            if hasattr(self._thread_local, 'user_id') and self._thread_local.user_id is not None:
+                return self._thread_local.user_id
+                
+            # 如果存储了完整用户对象，返回其ID
+            elif hasattr(self._thread_local, 'user') and self._thread_local.user is not None:
+                return self._thread_local.user.userid
+                
+            else:
+                return None
+        except Exception as e:
+            logger.error(f"获取当前用户ID失败: {str(e)}")
             return None 

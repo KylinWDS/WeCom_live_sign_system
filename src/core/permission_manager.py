@@ -31,6 +31,7 @@ class PermissionManager:
             "view_signs",
             "export_signs",
             "view_stats",
+            "view_system_monitor",
             "manage_users",
             "manage_roles",
             "manage_permissions"

@@ -22,6 +22,7 @@ class ConfigManager:
         self.config = None
         self.logger = logger
         self.current_user = None
+        self.current_user_id = None
         logger.info("初始化ConfigManager...")
         
     def initialize(self, config_dir: str, system_config: Dict[str, Any] = None) -> bool:
@@ -527,7 +528,7 @@ class ConfigManager:
             details: 变更详情
         """
         try:
-            if not self.current_user:
+            if not hasattr(self, 'current_user_id') or not self.current_user_id:
                 return
                 
             from ..models.config_change import ConfigChange
@@ -536,10 +537,12 @@ class ConfigManager:
             db_manager = DatabaseManager()
             with db_manager.get_session() as session:
                 try:
-                    # 在新会话中查询用户
-                    user = session.query(User).filter_by(userid=self.current_user.userid).first()
+                    from ..models.user import User
+                    
+                    # 查询用户
+                    user = session.query(User).get(self.current_user_id)
                     if not user:
-                        self.logger.warning(f"未找到用户: {self.current_user.userid}")
+                        self.logger.warning(f"未找到用户: {self.current_user_id}")
                         return
                     
                     # 创建配置变更记录
@@ -574,47 +577,95 @@ class ConfigManager:
             details: 操作详情
         """
         try:
-            if not self.current_user:
+            if not hasattr(self, 'current_user_id') or not self.current_user_id:
                 return
                 
             from ..models.operation_log import OperationLog
             from ..core.database import DatabaseManager
             
             db_manager = DatabaseManager()
-            session = db_manager.Session()
-            try:
-                # 确保用户对象绑定到会话
-                user = session.merge(self.current_user)
-                
-                # 创建操作日志
-                log = OperationLog(
-                    user_id=user.userid,
-                    operation_type=operation,
-                    operation_desc=details,
-                    operation_time=datetime.now(),
-                    ip_address=self._get_client_ip()
-                )
-                # 设置关联关系
-                log.user = user
-                
-                session.add(log)
-                session.commit()
-                self.logger.info(f"操作日志记录成功: {operation}")
-            except Exception as e:
-                session.rollback()
-                self.logger.error(f"记录操作日志失败2: {str(e)}")
-            finally:
-                session.close()
+            with db_manager.get_session() as session:
+                try:
+                    from ..models.user import User
+                    
+                    # 查询用户
+                    user = session.query(User).get(self.current_user_id)
+                    if not user:
+                        self.logger.warning(f"未找到用户: {self.current_user_id}")
+                        return
+                    
+                    # 创建操作日志
+                    log = OperationLog(
+                        user_id=user.userid,
+                        operation_type=operation,
+                        operation_desc=details,
+                        operation_time=datetime.now(),
+                        ip_address=self._get_client_ip()
+                    )
+                    # 设置关联关系
+                    log.user = user
+                    
+                    session.add(log)
+                    session.commit()
+                    self.logger.info(f"操作日志记录成功: {operation}")
+                except Exception as e:
+                    session.rollback()
+                    self.logger.error(f"记录操作日志失败: {str(e)}")
         except Exception as e:
-            self.logger.error(f"记录操作日志失败3: {str(e)}")
+            self.logger.error(f"记录操作日志失败: {str(e)}")
 
     def set_current_user(self, user):
         """设置当前用户
         
         Args:
-            user: 用户对象
+            user: 用户对象或用户ID
+            
+        Returns:
+            bool: 设置是否成功
         """
-        self.current_user = user
+        try:
+            if user is None:
+                self.current_user_id = None
+                self.current_user = None
+                return True
+                
+            # 如果是用户对象，存储用户ID和对象
+            if hasattr(user, 'userid'):
+                self.current_user_id = user.userid
+                self.current_user = user
+                return True
+            # 如果是整数，假定为用户ID
+            elif isinstance(user, int):
+                self.current_user_id = user
+                self.current_user = None  # 没有用户对象，只存ID
+                return True
+            else:
+                self.current_user_id = None
+                self.current_user = None
+                self.logger.warning(f"设置当前用户失败: 无效的用户 {user}")
+                return False
+        except Exception as e:
+            self.logger.error(f"设置当前用户失败: {str(e)}")
+            self.current_user_id = None
+            self.current_user = None
+            return False
+            
+    def get_current_user(self):
+        """获取当前用户
+        
+        Returns:
+            用户对象或None
+        """
+        try:
+            # 如果有完整的用户对象，直接返回
+            if hasattr(self, 'current_user') and self.current_user is not None:
+                return self.current_user
+                
+            # 如果只有ID，返回None
+            return None
+        except Exception as e:
+            self.logger.error(f"获取当前用户失败: {str(e)}")
+            return None
 
     def _get_client_ip(self) -> str:
         """获取客户端IP地址
