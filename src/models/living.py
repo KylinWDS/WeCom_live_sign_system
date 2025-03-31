@@ -55,6 +55,9 @@ class Living(BaseModel):
     
     # 关联到LiveViewer
     viewers = relationship("LiveViewer", back_populates="living", cascade="all, delete-orphan")
+    
+    # 关联到LiveRewardRecord
+    reward_records = relationship("LiveRewardRecord", back_populates="living", cascade="all, delete-orphan")
 
     def __init__(
         self,

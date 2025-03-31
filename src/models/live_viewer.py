@@ -57,13 +57,16 @@ class LiveViewer(BaseModel):
     # 奖励信息
     is_reward_eligible = Column(Boolean, default=False, comment="是否符合奖励条件")
     reward_amount = Column(Float, default=0.0, comment="红包奖励金额")
-    reward_status = Column(String(20), nullable=True, comment="奖励发放状态")
+    reward_status = Column(String(20), nullable=True, comment="奖励发放状态，综合导出数据则认定为已发放")
     
     # 关联
     living = relationship("Living", back_populates="viewers")
     
     # 签到记录关联
     sign_records = relationship("LiveSignRecord", back_populates="viewer", cascade="all, delete-orphan")
+    
+    # 奖励记录关联
+    reward_records = relationship("LiveRewardRecord", back_populates="viewer", cascade="all, delete-orphan")
     
     # 兼容旧版关系
     live_booking_id = Column(Integer, ForeignKey("live_bookings.id"), nullable=True)
