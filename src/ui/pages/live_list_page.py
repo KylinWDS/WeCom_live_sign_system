@@ -1392,11 +1392,16 @@ class LiveListPage(QWidget):
     def export_data(self):
         """导出数据"""
         try:
+            # 创建默认文件名（包含当前日期时间）
+            from datetime import datetime
+            current_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_filename = f"直播数据导出_{current_datetime}.xlsx"
+            
             # 选择保存路径
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
                 "保存Excel文件",
-                "",
+                default_filename,  # 使用默认文件名
                 "Excel Files (*.xlsx)"
             )
             if not file_path:
@@ -1404,30 +1409,54 @@ class LiveListPage(QWidget):
                 
             # 获取所有直播记录
             with self.db_manager.get_session() as session:
-                result = session.execute(select(Living))
-                records = result.scalars().all()
+                records = session.query(Living).all()
                 
-                # 创建DataFrame
+                if not records:
+                    ErrorHandler.handle_warning("没有找到直播记录", self, "导出失败")
+                    return
+                    
+                # 转换数据
                 data = []
+                
                 for record in records:
+                    # 创建记录数据字典
+                    record_data = {}
+                    
                     # 计算结束时间
                     end_time = ""
                     if record.living_start and record.living_duration:
-                        end_time = (record.living_start + timedelta(seconds=record.living_duration)).strftime("%Y-%m-%d %H:%M:%S")
+                        try:
+                            from datetime import timedelta
+                            end_time_obj = record.living_start + timedelta(seconds=record.living_duration)
+                            end_time = end_time_obj.strftime("%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            pass
                     
-                    # 获取主播的名称
-                    from src.models.user import User
-                    user = session.query(User).filter(
-                        (User.wecom_code == record.anchor_userid) | 
-                        (User.login_name == record.anchor_userid)
-                    ).first()
+                    # 获取主播名称
+                    anchor_name = record.anchor_userid
+                    try:
+                        user = session.query(User).filter(
+                            (User.userid == record.anchor_userid) | (User.wecom_code == record.anchor_userid)
+                        ).first()
+                        if user:
+                            anchor_name = f"{user.name}({record.anchor_userid})"
+                    except Exception:
+                        pass
                     
-                    anchor_name = f"{user.name}({record.anchor_userid})" if user else record.anchor_userid
+                    # 获取直播类型文本
+                    from src.models.living import LivingType
+                    type_text = {
+                        LivingType.GENERAL: "通用直播",
+                        LivingType.SMALL: "小班课",
+                        LivingType.LARGE: "大班课",
+                        LivingType.TRAINING: "企业培训",
+                        LivingType.EVENT: "活动直播",
+                    }.get(record.type, "未知")
                     
                     # 获取签到统计信息
+                    from sqlalchemy import func
                     from src.models.live_viewer import LiveViewer
-                    # 使用 LiveViewer 查询签到统计
-                    sign_stats = {}
+                    
                     with self.db_manager.get_session() as stats_session:
                         # 获取不同的签到人数
                         unique_signers = stats_session.query(func.count(LiveViewer.id)).filter(
@@ -1453,25 +1482,15 @@ class LiveListPage(QWidget):
                             "sign_time": first_sign
                         }
                     
-                    record_data["sign_count"] = sign_stats["unique_signers"]  # 使用unique_signers作为签到人数
-                    record_data["total_sign_count"] = sign_stats["sign_count"]  # 总签到次数
-                    record_data["sign_time"] = sign_stats["sign_time"]
-                    
-                    # 获取直播类型
-                    type_text = {
-                        LivingType.GENERAL: "通用直播",
-                        LivingType.SMALL: "小班课",
-                        LivingType.LARGE: "大班课",
-                        LivingType.TRAINING: "企业培训",
-                        LivingType.EVENT: "活动直播"
-                    }.get(record.type, "未知")
-                    
+                    # 使用中文字段名创建记录
                     data.append({
                         "直播ID": record.livingid,
-                        "直播标题": record.theme,
+                        "直播主题": record.theme,
                         "开始时间": record.living_start.strftime("%Y-%m-%d %H:%M:%S") if record.living_start else "",
                         "结束时间": end_time,
+                        "直播时长(秒)": record.living_duration,
                         "主播": anchor_name,
+                        "直播类型": type_text,
                         "状态": {
                             LivingStatus.RESERVED: "预约中",
                             LivingStatus.LIVING: "直播中",
@@ -1479,27 +1498,34 @@ class LiveListPage(QWidget):
                             LivingStatus.EXPIRED: "已过期",
                             LivingStatus.CANCELLED: "已取消"
                         }.get(record.status, "未知"),
-                        "直播类型": type_text,
+                        "企业名称": record.corpname,
+                        "描述": record.description or "",
                         "观看人数": record.viewer_num,
                         "评论数": record.comment_num,
-                        "签到人数": sign_stats["unique_signers"],  # 不同的签到人数
-                        "签到次数": sign_stats["sign_count"],      # 总签到次数
-                        "首次签到时间": sign_stats["sign_time"] if sign_stats["sign_time"] else "-",
-                        "已拉取观看信息": "是" if record.is_viewer_fetched == 1 else "否",
-                        "已导入签到": "是" if record.is_sign_imported == 1 else "否",
-                        "已上传企微文档": "是" if record.is_doc_uploaded == 1 else "否",
-                        "已远程同步": "是" if record.is_remote_synced == 1 else "否",
-                        "记录创建时间": record.created_at.strftime("%Y-%m-%d %H:%M:%S") if record.created_at else "",
-                        "记录更新时间": record.updated_at.strftime("%Y-%m-%d %H:%M:%S") if record.updated_at else ""
+                        "连麦人数": record.mic_num,
+                        "在线人数": record.online_count,
+                        "预约人数": record.subscribe_count,
+                        "签到人数": sign_stats["unique_signers"],
+                        "签到次数": sign_stats["sign_count"],
+                        "首次签到时间": sign_stats["sign_time"].strftime("%Y-%m-%d %H:%M:%S") if sign_stats["sign_time"] else "",
+                        "观看信息状态": "已拉取" if record.is_viewer_fetched == 1 else "未拉取",
+                        "签到导入状态": "已导入" if record.is_sign_imported == 1 else "未导入",
+                        "企微文档状态": "已上传" if record.is_doc_uploaded == 1 else "未上传",
+                        "远程同步状态": "已同步" if record.is_remote_synced == 1 else "未同步",
+                        "创建时间": record.created_at.strftime("%Y-%m-%d %H:%M:%S") if record.created_at else "",
+                        "更新时间": record.updated_at.strftime("%Y-%m-%d %H:%M:%S") if record.updated_at else ""
                     })
-            
+                    
+            # 创建DataFrame并导出到Excel
             df = pd.DataFrame(data)
             
             # 导出到Excel
-            df.to_excel(file_path, index=False)
+            df.to_excel(file_path, index=False, sheet_name="直播数据")
             
-            ErrorHandler.handle_info("导出数据成功", self, "成功")
-            
+            # 显示成功消息
+            msg_box = AutoCloseMessageBox("导出成功", f"已成功导出 {len(data)} 条直播记录到文件:\n{file_path}", 3000, self)
+            msg_box.exec()
+
         except Exception as e:
             ErrorHandler.handle_error(e, self, "导出数据失败")
             
