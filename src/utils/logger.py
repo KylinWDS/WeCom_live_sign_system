@@ -21,7 +21,7 @@ def setup_logger(log_dir: str = None, log_level: str = "INFO", log_retention: in
     global _logger, _is_initialized
     # 如果没有指定日志目录，使用用户目录下的默认位置
     if log_dir is None:
-        log_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign", "logs")
+        log_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign_system", "logs")
     # 确保日志目录存在
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)

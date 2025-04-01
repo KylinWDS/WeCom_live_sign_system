@@ -43,7 +43,7 @@ def get_config_path():
         tuple: (配置目录路径, 是否需要初始化)
     """
     # 默认配置目录
-    default_config_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign")
+    default_config_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign_system")
     default_config_file = os.path.join(default_config_dir, "config.json")
 
     # 确保默认配置目录存在
@@ -105,7 +105,7 @@ def main():
         config_manager.config_dir = config_dir  # 先设置配置目录
 
         # 设置默认日志目录（在用户配置目录下）
-        default_log_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign", "logs")
+        default_log_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign_system", "logs")
 
         if need_init:
             # 首次运行时使用默认日志配置

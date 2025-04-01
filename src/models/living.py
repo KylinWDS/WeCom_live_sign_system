@@ -79,7 +79,8 @@ class Living(BaseModel):
         is_viewer_fetched: int = 0,
         is_sign_imported: int = 0,
         is_doc_uploaded: int = 0,
-        is_remote_synced: int = 0
+        is_remote_synced: int = 0,
+        live_booking_id: Optional[int] = None
     ):
         self.livingid = livingid
         self.theme = theme
@@ -100,6 +101,7 @@ class Living(BaseModel):
         self.is_sign_imported = is_sign_imported
         self.is_doc_uploaded = is_doc_uploaded
         self.is_remote_synced = is_remote_synced
+        self.live_booking_id = live_booking_id
     
     def is_active(self) -> bool:
         """检查直播是否正在进行中
@@ -151,5 +153,6 @@ class Living(BaseModel):
             "is_viewer_fetched": self.is_viewer_fetched,
             "is_sign_imported": self.is_sign_imported,
             "is_doc_uploaded": self.is_doc_uploaded,
-            "is_remote_synced": self.is_remote_synced
+            "is_remote_synced": self.is_remote_synced,
+            "live_booking_id": self.live_booking_id
         } 

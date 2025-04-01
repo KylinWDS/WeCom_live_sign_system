@@ -113,7 +113,7 @@ class InitWizard(QWizard):
         # 日志目录
         log_layout = QHBoxLayout()
         self.log_path = QLineEdit()
-        self.log_path.setText(os.path.join(os.path.expanduser("~"), ".wecom_live_sign", "logs"))
+        self.log_path.setText(os.path.join(os.path.expanduser("~"), ".wecom_live_sign_system", "logs"))
         log_browse = QPushButton("浏览")
         log_browse.clicked.connect(lambda: self.browse_path(self.log_path, "选择日志目录"))
         log_layout.addWidget(self.log_path)
@@ -624,7 +624,7 @@ class InitWizard(QWizard):
             logger.info("开始执行初始化配置...")
             
             # 1. 更新默认配置文件中的路径信息
-            default_config_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign")
+            default_config_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign_system")
             default_config_file = os.path.join(default_config_dir, "config.json")
             
             # 确保默认配置目录存在
@@ -765,7 +765,10 @@ class InitWizard(QWizard):
             if not self.auth_manager.create_corp_admin(
                 username=self.corp_admin_username.text(),
                 password=self.corp_admin_password.text(),
-                corp_name=self.corp_name.text()
+                corp_name=self.corp_name.text(),
+                corp_id=self.corp_id.text(),
+                corp_secret=self.corp_secret.text(),
+                agent_id=self.agent_id.text()
             ):
                 raise RuntimeError("创建企业管理员账号失败")
             

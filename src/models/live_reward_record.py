@@ -16,6 +16,39 @@ class RewardRuleType(enum.Enum):
     WATCH_COUNT = "watch-count"    # 观看时长和观看场次
     ALL_OR = "all-or"              # 所有条件满足其一即可
     ALL_AND = "all-and"            # 所有条件必须全满足
+    
+    @classmethod
+    def from_string(cls, value):
+        """从字符串创建枚举值，处理各种格式的输入
+        
+        Args:
+            value: 字符串或枚举值
+            
+        Returns:
+            RewardRuleType: 对应的枚举值
+        """
+        if isinstance(value, cls):
+            return value
+            
+        if not isinstance(value, str):
+            value = str(value)
+            
+        # 标准化字符串 (小写 + 去除空白)
+        value = value.lower().strip()
+        
+        # 尝试直接匹配
+        try:
+            return cls(value)
+        except ValueError:
+            # 尝试通过枚举名匹配 (将 "ALL_AND" 转为 "all-and")
+            for member in cls:
+                if member.name.lower().replace('_', '-') == value:
+                    return member
+                if member.value == value:
+                    return member
+                    
+            # 默认返回ALL_AND
+            return cls.ALL_AND
 
 
 class LiveRewardRecord(BaseModel):
@@ -106,7 +139,7 @@ class LiveRewardRecord(BaseModel):
         # 处理枚举类型
         if 'rule_type' in data and isinstance(data['rule_type'], str):
             try:
-                data['rule_type'] = RewardRuleType(data['rule_type'])
+                data['rule_type'] = RewardRuleType.from_string(data['rule_type'])
             except ValueError:
                 data['rule_type'] = RewardRuleType.ALL_AND  # 默认值
         

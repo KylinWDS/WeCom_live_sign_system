@@ -28,13 +28,14 @@ from src.models.user import User, UserRole
 import pandas as pd
 import os
 from typing import List, Optional, Dict, Any
-from sqlalchemy import select, func, and_, or_, cast, String
+from sqlalchemy import select, func, and_, or_, cast, String, text
 from src.core.live_viewer_manager import LiveViewerManager
 import concurrent.futures
 from threading import Lock
 from copy import deepcopy
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from src.models.live_reward_record import LiveRewardRecord, RewardRuleType
+import logging
 
 logger = get_logger(__name__)
 
@@ -849,11 +850,18 @@ class LiveListPage(QWidget):
             
             # 从企业微信API获取直播ID列表
             livingid_list = []
+            # 创建一个映射，记录每个直播ID是从哪个用户获取的
+            livingid_user_map = {}
+            
             for userid in user_ids_for_api:
                 try:
                     response = self.wecom_api.get_user_all_livingid(userid)
                     if response.get("errcode") == 0:
-                        livingid_list.extend(response.get("livingid_list", []))
+                        live_ids = response.get("livingid_list", [])
+                        for live_id in live_ids:
+                            # 记录这个直播ID是从哪个用户获取的
+                            livingid_user_map[live_id] = userid
+                        livingid_list.extend(live_ids)
                 except Exception as e:
                     logger.error(f"获取用户 {userid} 的直播列表失败: {str(e)}")
             
@@ -916,6 +924,16 @@ class LiveListPage(QWidget):
             created_count = 0
             
             with self.db_manager.get_session() as session:
+                # 创建用户ID到用户对象的映射，用于获取企业信息
+                user_objects = {}
+                from sqlalchemy import or_
+                for userid in user_ids_for_api:
+                    user = session.query(User).filter(
+                        or_(User.wecom_code == userid, User.login_name == userid)
+                    ).first()
+                    if user:
+                        user_objects[userid] = user
+                
                 for livingid in all_live_ids:
                     # 从企业微信获取数据
                     try:
@@ -998,8 +1016,24 @@ class LiveListPage(QWidget):
                                 exists.anchor_userid = final_data.get("anchor_userid", exists.anchor_userid)
                                 exists.description = final_data.get("description", exists.description)
                                 # type 和 status 已在上面处理，这里不再赋值
-                                exists.corpname = final_data.get("corpname", exists.corpname)
-                                exists.agentid = final_data.get("agentid", exists.agentid)
+                                
+                                # 更新企业信息字段
+                                if final_data.get("corpname"):
+                                    exists.corpname = final_data.get("corpname")
+                                elif not exists.corpname and livingid in livingid_user_map:
+                                    # 如果corpname为空且知道该直播从哪个用户获取
+                                    user_id = livingid_user_map[livingid]
+                                    if user_id in user_objects and user_objects[user_id].corpname:
+                                        exists.corpname = user_objects[user_id].corpname
+                                
+                                if final_data.get("agentid"):
+                                    exists.agentid = final_data.get("agentid")
+                                elif not exists.agentid and livingid in livingid_user_map:
+                                    # 如果agentid为空且知道该直播从哪个用户获取
+                                    user_id = livingid_user_map[livingid]
+                                    if user_id in user_objects and user_objects[user_id].agentid:
+                                        exists.agentid = user_objects[user_id].agentid
+                                
                                 exists.viewer_num = final_data.get("viewer_num", exists.viewer_num)
                                 exists.comment_num = final_data.get("comment_num", exists.comment_num)
                                 exists.mic_num = final_data.get("mic_num", exists.mic_num)
@@ -1049,6 +1083,19 @@ class LiveListPage(QWidget):
                                     }
                                     status_value = status_map.get(status_value, LivingStatus.RESERVED)
                                 
+                                # 获取企业信息，优先使用API数据，其次使用关联用户的企业信息
+                                corpname = final_data.get("corpname", "")
+                                agentid = final_data.get("agentid", "")
+                                
+                                # 如果企业信息为空，尝试从用户获取
+                                if (not corpname or not agentid) and livingid in livingid_user_map:
+                                    user_id = livingid_user_map[livingid]
+                                    if user_id in user_objects:
+                                        if not corpname and user_objects[user_id].corpname:
+                                            corpname = user_objects[user_id].corpname
+                                        if not agentid and user_objects[user_id].agentid:
+                                            agentid = user_objects[user_id].agentid
+                                
                                 new_living = Living(
                                     livingid=livingid,
                                     theme=final_data.get("theme", ""),
@@ -1058,8 +1105,8 @@ class LiveListPage(QWidget):
                                     description=final_data.get("description", ""),
                                     type=type_value,
                                     status=status_value,
-                                    corpname=final_data.get("corpname", ""),
-                                    agentid=final_data.get("agentid", ""),
+                                    corpname=corpname,
+                                    agentid=agentid,
                                     viewer_num=final_data.get("viewer_num", 0),
                                     comment_num=final_data.get("comment_num", 0),
                                     mic_num=final_data.get("mic_num", 0),
@@ -1392,11 +1439,16 @@ class LiveListPage(QWidget):
     def export_data(self):
         """导出数据"""
         try:
+            # 创建默认文件名（包含当前日期时间）
+            from datetime import datetime
+            current_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_filename = f"直播数据导出_{current_datetime}.xlsx"
+            
             # 选择保存路径
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
                 "保存Excel文件",
-                "",
+                default_filename,  # 使用默认文件名
                 "Excel Files (*.xlsx)"
             )
             if not file_path:
@@ -1404,30 +1456,54 @@ class LiveListPage(QWidget):
                 
             # 获取所有直播记录
             with self.db_manager.get_session() as session:
-                result = session.execute(select(Living))
-                records = result.scalars().all()
+                records = session.query(Living).all()
                 
-                # 创建DataFrame
+                if not records:
+                    ErrorHandler.handle_warning("没有找到直播记录", self, "导出失败")
+                    return
+                    
+                # 转换数据
                 data = []
+                
                 for record in records:
+                    # 创建记录数据字典
+                    record_data = {}
+                    
                     # 计算结束时间
                     end_time = ""
                     if record.living_start and record.living_duration:
-                        end_time = (record.living_start + timedelta(seconds=record.living_duration)).strftime("%Y-%m-%d %H:%M:%S")
+                        try:
+                            from datetime import timedelta
+                            end_time_obj = record.living_start + timedelta(seconds=record.living_duration)
+                            end_time = end_time_obj.strftime("%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            pass
                     
-                    # 获取主播的名称
-                    from src.models.user import User
-                    user = session.query(User).filter(
-                        (User.wecom_code == record.anchor_userid) | 
-                        (User.login_name == record.anchor_userid)
-                    ).first()
+                    # 获取主播名称
+                    anchor_name = record.anchor_userid
+                    try:
+                        user = session.query(User).filter(
+                                (User.userid == record.anchor_userid) | (User.wecom_code == record.anchor_userid)
+                        ).first()
+                        if user:
+                            anchor_name = f"{user.name}({record.anchor_userid})"
+                    except Exception:
+                        pass
                     
-                    anchor_name = f"{user.name}({record.anchor_userid})" if user else record.anchor_userid
+                    # 获取直播类型文本
+                    from src.models.living import LivingType
+                    type_text = {
+                        LivingType.GENERAL: "通用直播",
+                        LivingType.SMALL: "小班课",
+                        LivingType.LARGE: "大班课",
+                        LivingType.TRAINING: "企业培训",
+                        LivingType.EVENT: "活动直播",
+                    }.get(record.type, "未知")
                     
                     # 获取签到统计信息
+                    from sqlalchemy import func
                     from src.models.live_viewer import LiveViewer
-                    # 使用 LiveViewer 查询签到统计
-                    sign_stats = {}
+                    
                     with self.db_manager.get_session() as stats_session:
                         # 获取不同的签到人数
                         unique_signers = stats_session.query(func.count(LiveViewer.id)).filter(
@@ -1453,25 +1529,15 @@ class LiveListPage(QWidget):
                             "sign_time": first_sign
                         }
                     
-                    record_data["sign_count"] = sign_stats["unique_signers"]  # 使用unique_signers作为签到人数
-                    record_data["total_sign_count"] = sign_stats["sign_count"]  # 总签到次数
-                    record_data["sign_time"] = sign_stats["sign_time"]
-                    
-                    # 获取直播类型
-                    type_text = {
-                        LivingType.GENERAL: "通用直播",
-                        LivingType.SMALL: "小班课",
-                        LivingType.LARGE: "大班课",
-                        LivingType.TRAINING: "企业培训",
-                        LivingType.EVENT: "活动直播"
-                    }.get(record.type, "未知")
-                    
+                    # 使用中文字段名创建记录
                     data.append({
                         "直播ID": record.livingid,
-                        "直播标题": record.theme,
+                        "直播主题": record.theme,
                         "开始时间": record.living_start.strftime("%Y-%m-%d %H:%M:%S") if record.living_start else "",
                         "结束时间": end_time,
+                        "直播时长(秒)": record.living_duration,
                         "主播": anchor_name,
+                        "直播类型": type_text,
                         "状态": {
                             LivingStatus.RESERVED: "预约中",
                             LivingStatus.LIVING: "直播中",
@@ -1479,26 +1545,33 @@ class LiveListPage(QWidget):
                             LivingStatus.EXPIRED: "已过期",
                             LivingStatus.CANCELLED: "已取消"
                         }.get(record.status, "未知"),
-                        "直播类型": type_text,
+                        "企业名称": record.corpname,
+                        "描述": record.description or "",
                         "观看人数": record.viewer_num,
                         "评论数": record.comment_num,
-                        "签到人数": sign_stats["unique_signers"],  # 不同的签到人数
-                        "签到次数": sign_stats["sign_count"],      # 总签到次数
-                        "首次签到时间": sign_stats["sign_time"] if sign_stats["sign_time"] else "-",
-                        "已拉取观看信息": "是" if record.is_viewer_fetched == 1 else "否",
-                        "已导入签到": "是" if record.is_sign_imported == 1 else "否",
-                        "已上传企微文档": "是" if record.is_doc_uploaded == 1 else "否",
-                        "已远程同步": "是" if record.is_remote_synced == 1 else "否",
-                        "记录创建时间": record.created_at.strftime("%Y-%m-%d %H:%M:%S") if record.created_at else "",
-                        "记录更新时间": record.updated_at.strftime("%Y-%m-%d %H:%M:%S") if record.updated_at else ""
+                        "连麦人数": record.mic_num,
+                        "在线人数": record.online_count,
+                        "预约人数": record.subscribe_count,
+                        "签到人数": sign_stats["unique_signers"],
+                        "签到次数": sign_stats["sign_count"],
+                        "首次签到时间": sign_stats["sign_time"].strftime("%Y-%m-%d %H:%M:%S") if sign_stats["sign_time"] else "",
+                        "观看信息状态": "已拉取" if record.is_viewer_fetched == 1 else "未拉取",
+                        "签到导入状态": "已导入" if record.is_sign_imported == 1 else "未导入",
+                        "企微文档状态": "已上传" if record.is_doc_uploaded == 1 else "未上传",
+                        "远程同步状态": "已同步" if record.is_remote_synced == 1 else "未同步",
+                        "创建时间": record.created_at.strftime("%Y-%m-%d %H:%M:%S") if record.created_at else "",
+                        "更新时间": record.updated_at.strftime("%Y-%m-%d %H:%M:%S") if record.updated_at else ""
                     })
-            
+                    
+            # 创建DataFrame并导出到Excel
             df = pd.DataFrame(data)
             
             # 导出到Excel
-            df.to_excel(file_path, index=False)
+            df.to_excel(file_path, index=False, sheet_name="直播数据")
             
-            ErrorHandler.handle_info("导出数据成功", self, "成功")
+            # 显示成功消息
+            msg_box = AutoCloseMessageBox("导出成功", f"已成功导出 {len(data)} 条直播记录到文件:\n{file_path}", 3000, self)
+            msg_box.exec()
             
         except Exception as e:
             ErrorHandler.handle_error(e, self, "导出数据失败")
@@ -3192,7 +3265,7 @@ class CombinedExportDialog(QDialog):
         self.close_btn = QPushButton("关闭")
         
         self.calculate_btn.clicked.connect(self.calculate_reward)
-        self.export_btn.clicked.connect(self.export_data)
+        self.export_btn.clicked.connect(self.composite_export_data)
         self.close_btn.clicked.connect(self.close)
         
         button_layout.addWidget(self.calculate_btn)
@@ -3427,11 +3500,11 @@ class CombinedExportDialog(QDialog):
         
         # 转换规则类型
         try:
-            rule_type = RewardRuleType(rule_type_str)
-            logger.info(f"解析规则类型成功: {rule_type}")
-        except ValueError:
+            rule_type = RewardRuleType.from_string(rule_type_str)
+            logger.info(f"解析规则类型成功: {rule_type}, 对应值: {rule_type.value}")
+        except Exception as e:
             rule_type = RewardRuleType.ALL_AND  # 默认值
-            logger.warning(f"解析规则类型失败，使用默认值: {rule_type}")
+            logger.warning(f"解析规则类型失败，使用默认值: {rule_type}, 错误: {str(e)}")
         
         # 收集所有选中的直播数据
         selected_lives = []
@@ -3932,7 +4005,745 @@ class CombinedExportDialog(QDialog):
         
         logger.info("==================== 结束计算奖励 ====================")
         
-    def export_data(self):
+    def composite_export_data(self):
         """导出数据"""
-        # 暂时占位，稍后实现
-        QMessageBox.information(self, "提示", "导出数据功能即将实现")
+        # 获取或创建logger，避免多次导入
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # 声明进度对话框变量，确保finally块中可以访问
+        progress = None
+        
+        try:
+            # 1. 初始检查 - 确保选择了直播
+            if not self.selected_live_ids:
+                QMessageBox.warning(self, "警告", "请至少选择一场直播")
+                return
+                
+            selected_lives = list(self.selected_live_ids)
+            logger.info(f"开始导出数据，选中的直播ID: {selected_lives}")
+            
+            # 辅助函数：处理用户取消操作
+            def handle_cancel(session, message, close_progress=True, rollback=True):
+                nonlocal progress
+                if close_progress and progress:
+                    progress.close()
+                logger.info(message)
+                if rollback:
+                    session.rollback()  # 回滚所有未提交的数据库更改
+                return False
+            
+            # 使用单个数据库会话执行所有操作
+            with self.db_manager.get_session() as session:
+                from src.models.live_reward_record import LiveRewardRecord
+                from src.models.live_sign_record import LiveSignRecord
+                from src.models.live_viewer import LiveViewer
+                from src.models.living import Living
+                from sqlalchemy import func, text, and_
+                
+                # ===== 校验阶段 =====
+                # 创建验证阶段进度对话框
+                progress = QProgressDialog("正在验证数据...", "取消", 0, 100, self)
+                progress.setWindowTitle("验证数据")
+                progress.setMinimumDuration(0)
+                progress.setWindowModality(Qt.WindowModal)
+                progress.setAutoClose(True)
+                progress.setValue(0)
+                
+                # --- 1. 检查奖励记录 ---
+                progress.setLabelText("检查奖励记录...")
+                progress.setValue(5)
+                
+                if progress.wasCanceled():
+                    return handle_cancel(session, "用户在验证开始阶段取消了操作")
+                
+                # 使用适合单个或多个ID的SQL语法
+                if len(selected_lives) > 1:
+                    reward_count_result = session.execute(
+                        text("SELECT COUNT(*) FROM live_reward_records WHERE living_id IN :ids"),
+                        {"ids": tuple(selected_lives)}
+                    )
+                else:
+                    reward_count_result = session.execute(
+                        text("SELECT COUNT(*) FROM live_reward_records WHERE living_id = :id"),
+                        {"id": selected_lives[0]}
+                    )
+                reward_count = reward_count_result.scalar()
+                
+                if reward_count == 0:
+                    progress.close()
+                    QMessageBox.warning(self, "警告", "请先计算奖励结果后再导出数据")
+                    return
+                
+                # --- 2. 预先获取所有直播信息 ---
+                # 一次性获取所有选中直播的信息，避免多次查询
+                livings_data = session.query(
+                    Living.id, 
+                    Living.theme, 
+                    Living.livingid
+                ).filter(
+                    Living.id.in_(selected_lives)
+                ).all()
+                
+                # 创建ID到livingid和theme的映射，用于后续使用
+                living_id_to_info = {
+                    living.id: {'livingid': living.livingid, 'theme': living.theme} 
+                    for living in livings_data
+                }
+                
+                # --- 3. 检查规则一致性 ---
+                progress.setLabelText("检查规则一致性...")
+                progress.setValue(20)
+                
+                if progress.wasCanceled():
+                    return handle_cancel(session, "用户在规则检查前取消了操作")
+                
+                # 获取当前规则设置
+                rule_type_value = self.rule_type_combo.currentData()
+                logger.info(f"当前界面选择的规则类型: {rule_type_value}, 类型: {type(rule_type_value).__name__}")
+                
+                # 获取当前页面上的规则设置
+                current_rules = {
+                    "min_watch_count": self.min_watch_count_spin.value()
+                }
+                
+                for row in range(self.table.rowCount()):
+                    # 获取签到次数设置
+                    sign_count_spin = self.table.cellWidget(row, 4)
+                    if sign_count_spin:
+                        current_rules[f"sign_count_{row}"] = sign_count_spin.value()
+                    
+                    # 获取观看时长设置
+                    watch_time_spin = self.table.cellWidget(row, 5)
+                    if watch_time_spin:
+                        current_rules[f"watch_time_{row}"] = watch_time_spin.value()
+                    
+                    # 获取红包金额设置
+                    reward_spin = self.table.cellWidget(row, 6)
+                    if reward_spin:
+                        current_rules[f"reward_{row}"] = reward_spin.value()
+                
+                # 逐个检查每个选中直播的奖励记录
+                missing_reward_lives = []  # 存储没有奖励记录的直播ID
+                rule_mismatch_lives = []   # 存储规则不匹配的直播ID
+                
+                # 批量查询所有选中直播的所有规则记录
+                try:
+                    # 使用text执行原始SQL查询避免枚举转换错误
+                    if len(selected_lives) > 1:
+                        sql = text("SELECT living_id, rule_type, rule_watch_count FROM live_reward_records WHERE living_id IN :ids")
+                        params = {"ids": tuple(selected_lives)}
+                    else:
+                        sql = text("SELECT living_id, rule_type, rule_watch_count FROM live_reward_records WHERE living_id = :id")
+                        params = {"id": selected_lives[0]}
+                    
+                    all_rewards_result = session.execute(sql, params)
+                    
+                    # 按直播ID分组规则记录
+                    live_id_to_rewards = {}
+                    
+                    # 创建一个类似的数据结构来保存查询结果
+                    RewardRecord = namedtuple('RewardRecord', ['living_id', 'rule_type', 'rule_watch_count'])
+                    
+                    for row in all_rewards_result:
+                        living_id = row[0]
+                        rule_type = row[1]  # 这是字符串类型
+                        rule_watch_count = row[2]
+                        
+                        # 创建自定义对象
+                        reward = RewardRecord(living_id=living_id, rule_type=rule_type, rule_watch_count=rule_watch_count)
+                        
+                        logger.info(f"从数据库获取的规则记录: 直播ID={living_id}, 规则类型={rule_type}, 类型={type(rule_type).__name__}, 最小观看场次={rule_watch_count}")
+                        
+                        if living_id not in live_id_to_rewards:
+                            live_id_to_rewards[living_id] = []
+                        live_id_to_rewards[living_id].append(reward)
+                except Exception as e:
+                    logger.error(f"查询规则记录时出错: {str(e)}")
+                    progress.close()
+                    QMessageBox.critical(self, "错误", f"查询规则记录时出错: {str(e)}")
+                    return
+                
+                # 检查每个直播的规则
+                for i, live_id in enumerate(selected_lives):
+                    # 更新进度
+                    progress.setValue(20 + int(20 * i / len(selected_lives)))
+                    
+                    if progress.wasCanceled():
+                        return handle_cancel(session, f"用户在检查直播 {live_id} 的规则时取消了操作")
+                    
+                    # 获取该直播的规则记录
+                    rewards = live_id_to_rewards.get(live_id, [])
+                    
+                    if not rewards:
+                        missing_reward_lives.append(live_id)
+                        continue
+                    
+                    # 随机取1-2条进行检查
+                    import random
+                    sample_size = min(2, len(rewards))
+                    reward_samples = random.sample(rewards, sample_size)
+                    
+                    # 从映射中获取直播标题
+                    live_title = living_id_to_info.get(live_id, {}).get('theme', f"直播ID: {live_id}")
+                    
+                    # 检查奖励规则是否与当前设置一致
+                    for reward in reward_samples:
+                        db_rule_type = reward.rule_type
+                        ui_rule_type = rule_type_value
+                        
+                        logger.info(f"直播 '{live_title}' - 数据库规则类型: {db_rule_type}, UI规则类型: {ui_rule_type}")
+                        
+                        # 添加详细的规则类型比较调试信息
+                        logger.info(f"db_rule_type类型: {type(db_rule_type).__name__}, ui_rule_type类型: {type(ui_rule_type).__name__}")
+                        
+                        # 使用RewardRuleType.from_string方法将字符串和枚举值进行标准化
+                        try:
+                            # 将数据库和UI的规则类型转换为枚举对象进行比较
+                            db_enum = RewardRuleType.from_string(db_rule_type)
+                            ui_enum = RewardRuleType.from_string(ui_rule_type)
+                            
+                            # 详细记录比较过程
+                            logger.info(f"规则类型比较 - DB原始值: '{db_rule_type}' -> 枚举: {db_enum}(值: {db_enum.value}), "
+                                       f"UI原始值: '{ui_rule_type}' -> 枚举: {ui_enum}(值: {ui_enum.value})")
+                            
+                            # 检查规则类型是否一致
+                            if db_enum != ui_enum:
+                                logger.warning(f"规则类型不匹配! DB枚举: {db_enum} != UI枚举: {ui_enum}")
+                                rule_mismatch_lives.append((live_id, live_title, "规则类型不一致"))
+                                break
+                            else:
+                                logger.info(f"规则类型匹配成功: {db_enum} == {ui_enum}")
+                        
+                        except Exception as e:
+                            # 记录转换过程中的任何错误
+                            logger.error(f"比较规则类型时出错: {str(e)}")
+                            # 回退到简单字符串比较
+                            db_str = str(db_rule_type).lower().strip()
+                            ui_str = str(ui_rule_type).lower().strip()
+                            if db_str != ui_str:
+                                logger.warning(f"回退比较: 规则类型不匹配! DB值: '{db_str}' != UI值: '{ui_str}'")
+                                rule_mismatch_lives.append((live_id, live_title, "规则类型不一致"))
+                                break
+                        
+                        # 检查最少观看场次是否一致（如果数据库中有这个字段）
+                        if hasattr(reward, 'rule_watch_count') and reward.rule_watch_count != current_rules.get("min_watch_count", 0):
+                            logger.warning(f"最少观看场次不一致! DB值: {reward.rule_watch_count}, UI值: {current_rules.get('min_watch_count', 0)}")
+                            rule_mismatch_lives.append((live_id, live_title, "最少观看场次不一致"))
+                            break
+                
+                progress.setValue(40)
+                
+                # 处理没有奖励记录的直播
+                if missing_reward_lives:
+                    missing_live_titles = []
+                    for live_id in missing_reward_lives:
+                        title = living_id_to_info.get(live_id, {}).get('theme', f"直播ID: {live_id}")
+                        missing_live_titles.append(title)
+                    
+                    progress.close()
+                    result = QMessageBox.warning(
+                        self,
+                        "缺少奖励数据",
+                        f"以下直播尚未计算奖励数据，请先计算后再导出：\n\n{', '.join(missing_live_titles)}",
+                        QMessageBox.Ok
+                    )
+                    return
+                
+                # 处理规则不匹配的直播
+                if rule_mismatch_lives:
+                    # 格式化不匹配信息
+                    mismatch_info = "\n".join([f"• {title} ({reason})" for _, title, reason in rule_mismatch_lives])
+                    
+                    progress.close()
+                    result = QMessageBox.question(
+                        self,
+                        "规则不一致",
+                        f"以下直播的奖励规则与当前导出规则不一致：\n\n{mismatch_info}\n\n是否重新计算奖励后再导出？",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.Yes
+                    )
+                    
+                    if result == QMessageBox.Yes:
+                        # 用户选择重新计算
+                        self.calculate_reward()
+                        return
+                    else:
+                        # 用户选择继续导出，重新显示进度对话框
+                        progress = QProgressDialog("正在验证数据...", "取消", 0, 100, self)
+                        progress.setWindowTitle("验证数据")
+                        progress.setMinimumDuration(0)
+                        progress.setWindowModality(Qt.WindowModal)
+                        progress.setAutoClose(True)
+                        progress.setValue(40)
+                
+                if progress.wasCanceled():
+                    return handle_cancel(session, "用户在规则不一致处理后取消了操作")
+                
+                # --- 4. 检查签到记录 ---
+                progress.setLabelText("检查签到记录...")
+                progress.setValue(60)
+                
+                # 批量查询签到记录数
+                missing_sign_records = []
+                
+                # 使用一次性查询获取所有直播的签到记录数
+                sign_records_query = session.query(
+                    Living.id,
+                    func.count(LiveSignRecord.id).label('sign_count')
+                ).outerjoin(
+                    LiveSignRecord,
+                    LiveSignRecord.living_id == Living.livingid
+                ).filter(
+                    Living.id.in_(selected_lives)
+                ).group_by(
+                    Living.id
+                ).all()
+                
+                # 检查每个直播的签到记录
+                for record in sign_records_query:
+                    if record.sign_count == 0:
+                        live_title = living_id_to_info.get(record.id, {}).get('theme', f"直播ID: {record.id}")
+                        missing_sign_records.append(live_title)
+                
+                if missing_sign_records:
+                    progress.close()
+                    missing_text = "\n- ".join(missing_sign_records)
+                    QMessageBox.warning(
+                        self, 
+                        "警告", 
+                        f"以下直播没有签到记录，请先导入签到后再计算奖励结果:\n- {missing_text}"
+                    )
+                    return
+                
+                if progress.wasCanceled():
+                    return handle_cancel(session, "用户在检查签到记录后取消了操作")
+                
+                # --- 5. 检查观众信息 ---
+                progress.setLabelText("检查观众信息...")
+                progress.setValue(80)
+                
+                # 批量查询观众记录数
+                missing_viewers = []
+                
+                # 使用一次性查询获取所有直播的观众记录数
+                viewer_records_query = session.query(
+                    Living.id,
+                    func.count(LiveViewer.id).label('viewer_count')
+                ).outerjoin(
+                    LiveViewer,
+                    LiveViewer.living_id == Living.id
+                ).filter(
+                    Living.id.in_(selected_lives)
+                ).group_by(
+                    Living.id
+                ).all()
+                
+                # 检查每个直播的观众记录
+                for record in viewer_records_query:
+                    if record.viewer_count == 0:
+                        live_title = living_id_to_info.get(record.id, {}).get('theme', f"直播ID: {record.id}")
+                        missing_viewers.append(live_title)
+                
+                if missing_viewers:
+                    progress.close()
+                    missing_text = "\n- ".join(missing_viewers)
+                    QMessageBox.warning(
+                        self, 
+                        "警告", 
+                        f"以下直播没有观众信息，请先拉取观众信息后再计算奖励结果:\n- {missing_text}"
+                    )
+                    return
+                
+                if progress.wasCanceled():
+                    return handle_cancel(session, "用户在检查观众信息后取消了操作")
+                
+                progress.setValue(100)
+                progress.close()
+                
+                # ===== 数据导出阶段 =====
+                # 完成校验后，再选择文件保存位置
+                from datetime import datetime
+                current_datetime = datetime.now().strftime("%Y%m%d%H%M%S")
+                default_filename = f"综合导出直播数据_{current_datetime}.xlsx"
+                
+                # 选择导出文件
+                file_path, _ = QFileDialog.getSaveFileName(
+                    self,
+                    "导出奖励结果",
+                    default_filename,
+                    "Excel Files (*.xlsx)"
+                )
+                
+                if not file_path:
+                    logger.info("用户取消了文件选择")
+                    return  # 用户取消了选择
+                
+                # 显示数据处理进度对话框
+                progress = QProgressDialog("正在导出数据...", "取消", 0, 100, self)
+                progress.setWindowTitle("导出数据")
+                progress.setMinimumDuration(0)
+                progress.setWindowModality(Qt.WindowModal)
+                progress.setAutoClose(True)
+                progress.setValue(0)
+                
+                # 预先准备数据导出
+                import pandas as pd
+                from openpyxl import Workbook
+                from openpyxl.styles import PatternFill
+                from openpyxl.utils.dataframe import dataframe_to_rows
+                from openpyxl.utils import get_column_letter
+                
+                # 获取用户记录总数以便显示进度
+                total_viewers_count = session.query(func.count(func.distinct(LiveViewer.userid))).filter(
+                    LiveViewer.living_id.in_(selected_lives)
+                ).scalar() or 0
+                
+                logger.info(f"预计需要处理 {total_viewers_count} 条用户记录")
+                
+                if progress.wasCanceled():
+                    return handle_cancel(session, "用户在数据准备阶段取消了操作")
+                
+                # 创建Excel工作簿
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "综合直播数据"
+                
+                # 设置标题行
+                headers = ["用户ID", "用户名称"]
+                
+                # 为每个直播添加三列数据
+                for i, live_id in enumerate(selected_lives, 1):
+                    title = living_id_to_info[live_id]['theme']
+                    headers.extend([
+                        f"观看时长{i} ({title})",
+                        f"签到次数{i} ({title})",
+                        f"邀请人{i} ({title})"
+                    ])
+                
+                # 添加合计和资格列
+                headers.extend(["红包合计($)", "是否合格"])
+                
+                # 写入标题行
+                for col, header in enumerate(headers, 1):
+                    ws.cell(row=1, column=col, value=header)
+                
+                # 为不同直播的列添加不同颜色
+                colors = ['FFCCCC', 'CCFFCC', 'CCCCFF', 'FFFFCC', 'FFCCFF', 'CCFFFF']
+                
+                # 设置标题行颜色
+                for i, live_id in enumerate(selected_lives, 1):
+                    color = colors[i % len(colors)]  # 循环使用颜色
+                    fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
+                    
+                    # 为每个直播的3列数据设置颜色
+                    col_start = 3 + (i-1)*3  # 从第3列开始是第一个直播的数据
+                    for col in range(col_start, col_start+3):
+                        ws.cell(row=1, column=col).fill = fill
+                
+                progress.setValue(10)
+                
+                if progress.wasCanceled():
+                    return handle_cancel(session, "用户在表格准备阶段取消了操作")
+                
+                # 批量处理用户数据
+                # 获取所有用户ID - 使用yield_per优化内存使用
+                all_viewer_ids_query = session.query(LiveViewer.userid).distinct().filter(
+                    LiveViewer.living_id.in_(selected_lives)
+                )
+                
+                # 当前行索引，从第2行开始（第1行是标题）
+                current_row = 2
+                
+                # 批处理大小
+                batch_size = 1000
+                
+                # 记录所有已处理的用户ID（用于更新reward_status）
+                processed_user_ids = set()
+                
+                # 获取总批次数
+                total_batches = (total_viewers_count + batch_size - 1) // batch_size
+                
+                logger.info(f"总共需要处理 {total_batches} 批数据，每批 {batch_size} 条")
+                
+                # 是否已有数据写入Excel
+                has_data_written = False
+                
+                try:
+                    # 辅助函数：转换秒为时分秒格式
+                    def format_seconds(seconds):
+                        if not seconds:
+                            return "未观看"
+                        hours, remainder = divmod(seconds, 3600)
+                        minutes, seconds = divmod(remainder, 60)
+                        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                    
+                    # 分批处理用户数据
+                    for batch_index in range(total_batches):
+                        if progress.wasCanceled():
+                            logger.info("用户在数据处理阶段取消了操作")
+                            raise CancelOperationException("用户取消了操作")
+                        
+                        # 计算当前批次的进度范围：10% - 80%，总共70%的进度用于处理数据
+                        progress_start = 10
+                        progress_end = 80
+                        progress_per_batch = (progress_end - progress_start) / total_batches
+                        current_progress = progress_start + batch_index * progress_per_batch
+                        progress.setValue(int(current_progress))
+                        progress.setLabelText(f"正在处理批次 {batch_index + 1}/{total_batches}...")
+                        
+                        # 获取当前批次的用户ID
+                        viewer_ids_batch = all_viewer_ids_query.limit(batch_size).offset(batch_index * batch_size).all()
+                        
+                        if not viewer_ids_batch:
+                            logger.info(f"批次 {batch_index + 1} 没有数据，跳过")
+                            continue
+                        
+                        logger.info(f"处理批次 {batch_index + 1}/{total_batches}，包含 {len(viewer_ids_batch)} 条用户ID")
+                        
+                        # 提取用户ID列表
+                        user_ids = [uid for (uid,) in viewer_ids_batch]
+                        processed_user_ids.update(user_ids)
+                        
+                        # 批量查询用户基本信息
+                        basic_info_query = session.query(
+                            LiveViewer.userid,
+                            LiveViewer.name,
+                            func.sum(LiveViewer.reward_amount).label('total_reward'),
+                            func.max(LiveViewer.is_reward_eligible).label('is_eligible')
+                        ).filter(
+                            LiveViewer.userid.in_(user_ids),
+                            LiveViewer.living_id.in_(selected_lives)
+                        ).group_by(
+                            LiveViewer.userid,
+                            LiveViewer.name
+                        ).all()
+                        
+                        # 创建用户ID到基本信息的映射
+                        user_id_to_basic_info = {
+                            info.userid: {
+                                'name': info.name,
+                                'total_reward': info.total_reward or 0,
+                                'is_eligible': info.is_eligible or False
+                            }
+                            for info in basic_info_query
+                        }
+                        
+                        # 批量查询用户观看记录 - 使用一次性查询优化
+                        viewer_info_dict = {}
+                        
+                        # 一次性查询所有选中直播的所有用户观看记录
+                        all_viewer_info = session.query(
+                            LiveViewer.userid,
+                            LiveViewer.living_id,
+                            LiveViewer.watch_time,
+                            LiveViewer.sign_count,
+                            LiveViewer.invitor_name
+                        ).filter(
+                            LiveViewer.userid.in_(user_ids),
+                            LiveViewer.living_id.in_(selected_lives)
+                        ).all()
+                        
+                        # 构建查询结果字典
+                        for info in all_viewer_info:
+                            viewer_info_dict[(info.userid, info.living_id)] = {
+                                'watch_time': info.watch_time,
+                                'sign_count': info.sign_count,
+                                'invitor_name': info.invitor_name
+                            }
+                        
+                        # 为每个用户生成一行数据
+                        for user_id in user_ids:
+                            if user_id not in user_id_to_basic_info:
+                                continue  # 跳过没有基本信息的用户
+                            
+                            has_data_written = True  # 标记已有数据写入
+                            
+                            basic_info = user_id_to_basic_info[user_id]
+                            
+                            # 在当前行写入基本信息
+                            ws.cell(row=current_row, column=1, value=user_id)
+                            ws.cell(row=current_row, column=2, value=basic_info['name'])
+                            
+                            # 为每个直播添加详细信息
+                            for i, live_id in enumerate(selected_lives, 1):
+                                viewer_info = viewer_info_dict.get((user_id, live_id), None)
+                                
+                                # 计算列索引
+                                watch_time_col = 3 + (i-1)*3
+                                sign_count_col = watch_time_col + 1
+                                invitor_col = watch_time_col + 2
+                                
+                                # 将秒转换为时分秒格式
+                                watch_time_str = format_seconds(viewer_info['watch_time'] if viewer_info else None)
+                                
+                                # 写入单元格
+                                ws.cell(row=current_row, column=watch_time_col, value=watch_time_str)
+                                ws.cell(row=current_row, column=sign_count_col, value=viewer_info['sign_count'] if viewer_info else 0)
+                                ws.cell(row=current_row, column=invitor_col, value=viewer_info['invitor_name'] if viewer_info and viewer_info['invitor_name'] else "无")
+                                
+                                # 设置颜色
+                                color = colors[i % len(colors)]
+                                fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
+                                for col in range(watch_time_col, invitor_col + 1):
+                                    ws.cell(row=current_row, column=col).fill = fill
+                            
+                            # 添加合计和资格信息
+                            last_col = 3 + len(selected_lives)*3
+                            ws.cell(row=current_row, column=last_col, value=basic_info['total_reward'])
+                            ws.cell(row=current_row, column=last_col+1, value="是" if basic_info['is_eligible'] else "否")
+                            
+                            # 移动到下一行
+                            current_row += 1
+                        
+                        # 适当控制内存清理
+                        if batch_index % 5 == 0:
+                            import gc
+                            gc.collect()
+                    
+                    progress.setValue(80)
+                    progress.setLabelText("正在保存Excel文件...")
+                    
+                    # 自动调整列宽
+                    for col in range(1, len(headers) + 1):
+                        max_length = 0
+                        column_letter = get_column_letter(col)
+                        # 仅检查前100行和标题行，避免过多计算
+                        max_rows = min(current_row - 1, 100)
+                        for row in range(1, max_rows + 1):
+                            cell_value = str(ws.cell(row=row, column=col).value or "")
+                            max_length = max(max_length, len(cell_value))
+                        # 设置列宽（字符宽度 + 2的边距）
+                        adjusted_width = max_length + 2
+                        ws.column_dimensions[column_letter].width = min(adjusted_width, 50)  # 最大宽度限制为50
+                    
+                    # 保存Excel文件
+                    wb.save(file_path)
+                    
+                    if progress.wasCanceled():
+                        return handle_cancel(session, "用户在保存Excel文件后取消了操作", True, True)
+                    
+                    progress.setValue(85)
+                    progress.setLabelText("正在更新数据库状态...")
+                    
+                    # 批量更新reward_status
+                    logger.info(f"更新 {len(processed_user_ids)} 个用户的reward_status")
+                    
+                    # 准备批量更新语句
+                    now = datetime.now()
+                    
+                    # 分批更新数据库记录，每批最多1000条
+                    updated_count = 0
+                    batch_size = 1000
+                    
+                    # 将用户ID列表分成多个批次
+                    user_id_batches = [list(processed_user_ids)[i:i+batch_size] for i in range(0, len(processed_user_ids), batch_size)]
+                    
+                    for batch_index, user_id_batch in enumerate(user_id_batches):
+                        if progress.wasCanceled():
+                            return handle_cancel(session, f"用户在更新数据库批次 {batch_index + 1}/{len(user_id_batches)} 时取消了操作", True, True)
+                        
+                        # 当前批次的进度：85% - 95%，总共10%
+                        progress_start = 85
+                        progress_end = 95
+                        progress_per_batch = (progress_end - progress_start) / len(user_id_batches)
+                        current_progress = progress_start + batch_index * progress_per_batch
+                        progress.setValue(int(current_progress))
+                        progress.setLabelText(f"正在更新数据库 {batch_index + 1}/{len(user_id_batches)}...")
+                        
+                        # 更新当前批次的用户记录
+                        viewers_to_update = session.query(LiveViewer).filter(
+                            LiveViewer.userid.in_(user_id_batch),
+                            LiveViewer.living_id.in_(selected_lives)
+                        ).all()
+                        
+                        for viewer in viewers_to_update:
+                            # 追加"已导出"标记（如果不存在）
+                            if not viewer.reward_status:
+                                viewer.reward_status = "已导出"
+                            elif "已导出" not in viewer.reward_status:
+                                viewer.reward_status += "，已导出"
+                            
+                            # 更新时间戳
+                            viewer.updated_at = now
+                            updated_count += 1
+                        
+                        # 每批次提交一次，减少内存占用
+                        session.commit()
+                    
+                    logger.info(f"成功更新了 {updated_count} 条记录的reward_status")
+                    
+                    progress.setValue(98)
+                    
+                    # 最终提交所有更改
+                    session.commit()
+                    
+                    progress.setValue(100)
+                    progress.close()
+                    
+                    # 显示成功消息
+                    # QMessageBox.information(
+                    #     self, 
+                    #     "成功", 
+                    #     f"已成功导出 {current_row - 2} 条用户记录到文件:\n{file_path}\n\n"
+                    #     f"已更新 {updated_count} 条记录的状态。"
+                    # )
+
+                    progress.setValue(100)
+                    # 进度对话框在这里关闭一次就足够了
+                    progress.close()
+                    
+                    # 创建一个自定义的消息框，包含打开文件按钮
+                    msg_box = QMessageBox(self)
+                    msg_box.setWindowTitle("导出成功")
+                    msg_box.setIcon(QMessageBox.Information)
+                    msg_box.setText(f"已成功导出 {current_row - 2} 条用户记录！")
+                    msg_box.setInformativeText(f"文件保存在：\n{file_path}\n\n已更新 {updated_count} 条记录的状态。")
+                    
+                    # 添加按钮
+                    open_button = msg_box.addButton("打开文件", QMessageBox.ActionRole)
+                    close_button = msg_box.addButton("关闭", QMessageBox.RejectRole)
+                    
+                    # 显示消息框，等待用户操作
+                    msg_box.exec()
+                    
+                    # 处理用户的按钮点击
+                    clicked_button = msg_box.clickedButton()
+                    if clicked_button == open_button:
+                        # 使用系统默认应用程序打开文件
+                        import subprocess
+                        import platform
+                        
+                        try:
+                            system = platform.system()
+                            if system == 'Darwin':  # macOS
+                                subprocess.call(('open', file_path))
+                            elif system == 'Windows':
+                                os.startfile(file_path)
+                            else:  # Linux
+                                subprocess.call(('xdg-open', file_path))
+                            logger.info(f"用户选择打开导出文件: {file_path}")
+                        except Exception as e:
+                            logger.error(f"打开文件失败: {str(e)}")
+                            QMessageBox.warning(self, "警告", f"无法打开文件，请手动查找：\n{file_path}")
+                    else:
+                        logger.info("用户关闭了导出成功提示框")
+                
+                except CancelOperationException as e:
+                    # 用户取消操作的异常处理
+                    return handle_cancel(session, "用户取消了操作", True, True)
+            
+        except Exception as e:
+            logger.error(f"导出数据失败: {str(e)}")
+            logger.exception("详细错误信息：")
+            QMessageBox.critical(self, "错误", f"导出数据失败: {str(e)}")
+            
+        finally:
+            # 确保进度对话框被关闭
+            if progress:
+                progress.close()
+
+# 添加自定义异常类，用于处理用户取消操作
+class CancelOperationException(Exception):
+    """用户取消操作的自定义异常"""
+    pass

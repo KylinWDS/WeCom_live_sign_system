@@ -158,29 +158,58 @@ class DatabaseManager:
             from src.models.corporation import Corporation
             from src.models.config_change import ConfigChange
             from src.models.operation_log import OperationLog
+            from src.models.live_sign_record import LiveSignRecord
+            from src.models.live_reward_record import LiveRewardRecord
             
             # 动态获取所有模型表
             # 使用Base.metadata.tables获取所有注册的表
             tables = Base.metadata.tables
             
+            # 添加额外的调试日志
+            logger.info(f"需要创建的表: {', '.join(tables.keys())}")
+            
             # 检查表是否已存在
             inspector = inspect(self.engine)
             created_tables = inspector.get_table_names()
+            logger.info(f"已存在的表: {', '.join(created_tables)}")
             
             # 创建未存在的表
+            created_count = 0
+            failed_tables = []
             for table_name, table_obj in tables.items():
-                if table_name not in created_tables:
-                    table_obj.create(self.engine, checkfirst=True)
-                    logger.info(f"创建表: {table_name}")
+                try:
+                    if table_name not in created_tables:
+                        table_obj.create(self.engine, checkfirst=True)
+                        logger.info(f"创建表: {table_name}")
+                        created_count += 1
+                    else:
+                        logger.info(f"表已存在，跳过: {table_name}")
+                        created_count += 1
+                except Exception as table_error:
+                    logger.error(f"创建表 {table_name} 时出错: {str(table_error)}")
+                    failed_tables.append(table_name)
             
             # 再次检查表是否都已创建
+            inspector = inspect(self.engine)
             created_tables = inspector.get_table_names()
-            if set(tables.keys()).issubset(set(created_tables)):
-                return True
-            else:
-                missing_tables = set(tables.keys()) - set(created_tables)
-                logger.error(f"部分表未创建成功: {', '.join(missing_tables)}")
+            logger.info(f"最终创建的表: {', '.join(created_tables)}")
+            
+            # 计算未创建的表
+            missing_tables = set(tables.keys()) - set(created_tables)
+            
+            # 宽松的成功条件：只要大部分表创建成功即视为成功
+            if len(missing_tables) > 0:
+                logger.warning(f"部分表未在检测中确认创建成功: {', '.join(missing_tables)}")
+                # 如果所有表都创建失败了，则返回失败
+                if created_count == 0:
+                    logger.error("所有表创建失败")
+                    return False
+                # 如果至少创建了一些表，视为成功
+                logger.info(f"成功创建了 {created_count}/{len(tables)} 个表，无法继续执行")
                 return False
+            else:
+                logger.info("所有表创建成功")
+                return True
             
         except Exception as e:
             logger.error(f"创建数据库表失败: {str(e)}")

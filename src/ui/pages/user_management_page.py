@@ -220,7 +220,13 @@ class UserDialog(QDialog):
                 
                 # 在会话内处理数据
                 for corp in corps:
+                    # 使用setItemData存储额外的企业信息
                     self.corp_combo.addItem(corp.name, corp.corp_id)
+                    # 存储当前项的索引
+                    index = self.corp_combo.count() - 1
+                    # 存储额外的企业信息为用户定义的角色数据
+                    self.corp_combo.setItemData(index, corp.corpsecret, Qt.UserRole + 1)
+                    self.corp_combo.setItemData(index, corp.agentid, Qt.UserRole + 2)
         except Exception as e:
             logger.error(f"加载企业列表失败: {str(e)}")
     
@@ -285,6 +291,9 @@ class UserDialog(QDialog):
         Returns:
             表单数据
         """
+        # 获取当前选中企业的索引
+        current_index = self.corp_combo.currentIndex()
+        
         data = {
             "login_name": self.login_name_edit.text(),
             "name": self.name_edit.text(),
@@ -294,6 +303,11 @@ class UserDialog(QDialog):
             "corpid": self.corp_combo.currentData(),
             "is_active": self.status.isChecked()
         }
+        
+        # 添加额外的企业信息（如果有选择企业）
+        if current_index > 0:  # 0是"请选择企业"
+            data["corpsecret"] = self.corp_combo.itemData(current_index, Qt.UserRole + 1)
+            data["agentid"] = self.corp_combo.itemData(current_index, Qt.UserRole + 2)
         
         # 仅在勾选修改密码时才包含密码
         if self.change_password_check.isChecked():
@@ -846,6 +860,8 @@ class UserManagementPage(QWidget):
                 'is_active': user.is_active,
                 'corpname': getattr(user, 'corpname', ''),
                 'corpid': getattr(user, 'corpid', ''),
+                'corpsecret': getattr(user, 'corpsecret', ''),
+                'agentid': getattr(user, 'agentid', ''),
                 'wecom_code': getattr(user, 'wecom_code', ''),
                 'userid': user.userid
             }

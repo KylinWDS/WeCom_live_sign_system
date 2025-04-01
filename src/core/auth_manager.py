@@ -90,7 +90,7 @@ class AuthManager:
             logger.error(f"设置超级管理员密码失败: {str(e)}")
             return False
             
-    def create_corp_admin(self, username: str, password: str, corp_name: str) -> bool:
+    def create_corp_admin(self, username: str, password: str, corp_name: str, corp_id: str, corp_secret: str, agent_id: str) -> bool:
         """创建企业管理员账号
         
         Args:
@@ -121,6 +121,9 @@ class AuthManager:
                     name=f"{corp_name}管理员",
                     role=UserRole.WECOM_ADMIN.value,
                     corpname=corp_name,
+                    corpid=corp_id,
+                    corpsecret=corp_secret,
+                    agentid=agent_id,
                     password_hash=password_hash,
                     salt=salt,
                     is_active=True,
