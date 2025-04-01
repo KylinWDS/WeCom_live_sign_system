@@ -3,6 +3,21 @@
 ## 概述
 模型模块定义了系统的数据模型，包括用户、直播、签到等核心业务实体。这些模型类负责数据的存储、验证和业务逻辑处理。
 
+## 系统配置
+
+系统采用灵活的配置机制，在应用首次启动时通过初始化向导让用户选择配置：
+
+### 配置路径
+- 默认配置路径：`~/.wecom_live_sign_system/`
+- 用户可以在初始化向导中自定义配置路径、数据路径、日志路径和备份路径
+- 配置信息存储在 `~/.wecom_live_sign_system/config.json` 中
+- 启动器(launcher.py)不直接处理配置，而是将配置处理委托给主程序(src/main.py)
+
+### 数据库文件
+- 默认位置：用户指定的数据目录下的 `data.db`
+- 可通过初始化向导自定义数据库文件名和位置
+- 通过 SQLAlchemy ORM 进行访问
+
 ## 基础模型
 
 ### 1. 基础模型类 (base.py)
@@ -119,7 +134,7 @@ class LiveBooking(BaseModel):
 ```
 
 ### 5. 直播观看者模型 (live_viewer.py)
-管理直播观看者信息。
+管理直播观看者信息。请参考 [LiveViewer.md](LiveViewer.md) 了解详细信息。
 
 主要字段：
 - viewer_id: 观看者ID
@@ -142,7 +157,7 @@ class LiveViewer(BaseModel):
 ```
 
 ### 6. 签到模型 (sign.py)
-管理签到信息。
+管理签到信息。注意：该模型的部分功能已迁移到 `LiveViewer` 模型中，请参考模型迁移文档 [README_MODEL_MIGRATION.md](README_MODEL_MIGRATION.md)。
 
 主要字段：
 - sign_id: 签到ID
@@ -164,130 +179,100 @@ class Sign(BaseModel):
         """获取直播签到记录"""
 ```
 
-### 7. 签到记录模型 (sign_record.py)
-管理详细的签到记录。
+### 7. 配置模型 (settings.py)
+管理系统配置信息。
 
 主要字段：
-- record_id: 记录ID
-- sign_id: 签到ID
-- user_id: 用户ID
-- record_time: 记录时间
-- record_type: 记录类型
+- key: 配置键
+- value: 配置值
+- type: 配置类型
+- description: 描述
+- created_at: 创建时间
+- updated_at: 更新时间
 
 主要方法：
 ```python
-class SignRecord(BaseModel):
+class Settings(BaseModel):
+    def get(self, key, default=None):
+        """获取配置值"""
+        
+    def set(self, key, value, type=None, description=None):
+        """设置配置值"""
+        
+    def delete(self, key):
+        """删除配置"""
+        
+    def get_all(self):
+        """获取所有配置"""
+```
+
+### 8. 企业模型 (corporation.py)
+管理企业信息。
+
+主要字段：
+- corp_id: 企业ID
+- name: 企业名称
+- corp_secret: 企业应用Secret
+- agent_id: 应用ID
+- status: 状态
+
+主要方法：
+```python
+class Corporation(BaseModel):
     def create(self, data):
-        """创建签到记录"""
+        """创建企业信息"""
         
-    def get_user_records(self, user_id):
-        """获取用户签到记录"""
+    def update(self, corp_id, data):
+        """更新企业信息"""
         
-    def get_live_records(self, live_id):
-        """获取直播签到记录"""
-```
-
-### 8. 邀请人缓存模型 (invitor_cache.py)
-管理邀请人信息缓存。
-
-主要字段：
-- cache_id: 缓存ID
-- user_id: 用户ID
-- invitor_id: 邀请人ID
-- cache_time: 缓存时间
-
-主要方法：
-```python
-class InvitorCache(BaseModel):
-    def set(self, user_id, invitor_id):
-        """设置缓存"""
+    def get_by_id(self, corp_id):
+        """根据ID获取企业信息"""
         
-    def get(self, user_id):
-        """获取缓存"""
-        
-    def clear(self, user_id):
-        """清除缓存"""
-```
-
-### 9. IP记录模型 (ip_record.py)
-管理IP地址记录。
-
-主要字段：
-- record_id: 记录ID
-- ip: IP地址
-- record_time: 记录时间
-- record_type: 记录类型
-
-主要方法：
-```python
-class IPRecord(BaseModel):
-    def add(self, ip, record_type):
-        """添加记录"""
-        
-    def get_records(self, ip):
-        """获取记录"""
-        
-    def clear_expired(self):
-        """清理过期记录"""
-```
-
-### 10. 导出配置模型 (export_config.py)
-管理导出配置信息。
-
-主要字段：
-- config_id: 配置ID
-- name: 配置名称
-- fields: 导出字段
-- format: 导出格式
-
-主要方法：
-```python
-class ExportConfig(BaseModel):
-    def create(self, data):
-        """创建配置"""
-        
-    def update(self, config_id, data):
-        """更新配置"""
-        
-    def get_config(self, config_id):
-        """获取配置"""
+    def get_token(self):
+        """获取企业微信访问令牌"""
 ```
 
 ## 模型关系
 
-### 1. 一对多关系
-- 直播 -> 直播观看者
-- 直播 -> 签到记录
-- 用户 -> 签到记录
+模型之间的主要关系如下：
 
-### 2. 多对多关系
-- 用户 <-> 直播（通过直播观看者）
-- 用户 <-> 签到（通过签到记录）
+1. 企业 (Corporation) 与 用户 (User)：一对多
+2. 直播 (Live) 与 观看者 (LiveViewer)：一对多
+3. 用户 (User) 与 直播预约 (LiveBooking)：一对多
+4. 直播 (Live) 与 签到 (Sign)：一对多
 
-## 数据验证
+## 数据访问
 
-### 1. 字段验证
+系统使用 SQLAlchemy ORM 进行数据访问，主要特点：
+
+1. 连接池管理
+2. 事务支持
+3. 惰性加载
+4. 级联操作
+
+示例：
 ```python
-class ModelValidator:
-    def validate_required(self, data, fields):
-        """验证必填字段"""
-        
-    def validate_type(self, data, field_types):
-        """验证字段类型"""
-        
-    def validate_range(self, data, field_ranges):
-        """验证字段范围"""
+# 创建会话
+with db.get_session() as session:
+    # 查询用户
+    user = session.query(User).filter_by(username="example").first()
+    
+    # 创建直播
+    live = Live(
+        title="示例直播",
+        anchor_id=user.id,
+        start_time=datetime.now(),
+        duration=3600
+    )
+    
+    # 保存到数据库
+    session.add(live)
+    session.commit()
 ```
 
-### 2. 业务验证
-```python
-class BusinessValidator:
-    def validate_live_creation(self, data):
-        """验证直播创建"""
-        
-    def validate_sign_in(self, data):
-        """验证签到"""
-```
+## 数据迁移
+
+系统支持数据模型升级和迁移。当模型结构发生变化时，可以使用迁移工具进行数据迁移。详细信息请参考 [README_MODEL_MIGRATION.md](README_MODEL_MIGRATION.md)。
 
 ## 注意事项
 1. 模型类应该保持单一职责

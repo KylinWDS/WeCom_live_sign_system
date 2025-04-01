@@ -1,3 +1,7 @@
+# 企业微信直播邀请签到系统需求文档
+
+> **文档说明**：本文档描述了企业微信直播邀请签到系统的需求细节。系统已经完成了基本实现，并经过数次优化。最新版本中，我们简化了启动流程，提供了更好的用户体验，包括美观的启动界面、进度显示和更合理的配置流程。请参考根目录README.md和documents/launcher.md了解系统启动和使用的最新信息。
+
 企微直播邀请签到系统
 我现在有一个要做客户端的需求，最终交付客户需要一个exe可执行文件，相关需求描述如下：
 1.开发语言请使用Python3，数据库存储数据请使用SQLite
@@ -39,7 +43,7 @@ curl --location --request POST 'https://qyapi.weixin.qq.com/cgi-bin/living/creat
 6.3.4.直播持续时长：living_duration，直播持续时长
 6.3.5.直播的开始时间和直播持续时长，可以做成一个可以选到秒级的时间组件，然后根据用户选择当前时间之后的时间，进行相关这两个字段填充
 6.3.6.直播的类型：type，直播的类型，默认填写3：企业培训。如用户选择其他选项，则提示用户可能会创建直播失败或流程失败的提示。直播的类型，0：通用直播，1：小班课，2：大班课，3：企业培训，4：活动直播，默认 0。其中大班课和小班课仅k12学校和IT行业类型能够发起
-6.3.8.直播的简介：description，直播的简介，最多支持100个utf8字符，仅对“通用直播”、“小班课”、“大班课”和“企业培训”生效
+6.3.8.直播的简介：description，直播的简介，最多支持100个utf8字符，仅对"通用直播"、"小班课"、"大班课"和"企业培训"生效
 6.3.9.agentid，应用ID，根据系统登入时填入的内容进行填写
 6.3.10.创建成功，如下，需将相关信息计入数据库,尤其是livingid，该直播ID字段很重要：
 {
@@ -201,8 +205,8 @@ stat_info.external_users.name	外部成员的名称
 stat_info.external_users.watch_time	观看时长，单位为秒
 stat_info.external_users.is_comment	是否评论。0-否；1-是
 stat_info.external_users.is_mic	是否连麦发言。0-否；1-是
-stat_info.external_users.invitor_userid	邀请人的userid，邀请人为企业内部成员时返回（观众首次进入直播时，其使用的直播卡片/二维码所对应的分享人；仅“推广产品”直播支持）
-stat_info.external_users.invitor_external_userid	邀请人的external_userid，邀请人为非企业内部成员时返回（观众首次进入直播时，其使用的直播卡片/二维码所对应的分享人；仅“推广产品”直播支持）
+stat_info.external_users.invitor_userid	邀请人的userid，邀请人为企业内部成员时返回（观众首次进入直播时，其使用的直播卡片/二维码所对应的分享人；仅"推广产品"直播支持）
+stat_info.external_users.invitor_external_userid	邀请人的external_userid，邀请人为非企业内部成员时返回（观众首次进入直播时，其使用的直播卡片/二维码所对应的分享人；仅"推广产品"直播支持）
 
 这个位置，要获取相关用户名称的时候，如下：
 7.4.1.首先，如果获取直播观看明细企业微信官方接口内进行了返回，则使用官方返回的名称
