@@ -14,12 +14,12 @@ class CacheManager:
         """初始化缓存管理器
         
         Args:
-            cache_dir: 缓存目录，如果为None则使用用户目录下的.wecom_live_sign/cache
+            cache_dir: 缓存目录，如果为None则使用用户目录下的.wecom_live_sign_system/cache
         """
         if cache_dir is None:
-            # 使用用户目录下的.wecom_live_sign/cache
+            # 使用用户目录下的.wecom_live_sign_system/cache
             user_home = os.path.expanduser("~")
-            cache_dir = os.path.join(user_home, ".wecom_live_sign", "cache")
+            cache_dir = os.path.join(user_home, ".wecom_live_sign_system", "cache")
             
         self.cache_dir = cache_dir
         self.memory_cache: Dict[str, Any] = {}

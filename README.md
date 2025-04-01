@@ -58,7 +58,7 @@
 ### 1. 克隆项目
 ```bash
 git clone [项目地址]
-cd WeCom_live_sign_system
+cd wecom_live_sign_system
 ```
 
 ### 2. 安装依赖

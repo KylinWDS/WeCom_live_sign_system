@@ -34,7 +34,7 @@ def generate_admin_token() -> str:
         
         # 生成签名
         message = f"{random_str}:{timestamp}"
-        secret = "wecom_live_sign_admin_secret"  # 在实际应用中应该使用更安全的密钥
+        secret = "wecom_live_sign_system_admin_secret"  # 在实际应用中应该使用更安全的密钥
         signature = hmac.new(
             secret.encode(),
             message.encode(),
@@ -82,7 +82,7 @@ def verify_admin_token(token: str) -> Tuple[bool, str]:
             
         # 验证签名
         message = f"{random_str}:{timestamp}"
-        secret = "wecom_live_sign_admin_secret"  # 在实际应用中应该使用更安全的密钥
+        secret = "wecom_live_sign_system_admin_secret"  # 在实际应用中应该使用更安全的密钥
         expected_signature = hmac.new(
             secret.encode(),
             message.encode(),

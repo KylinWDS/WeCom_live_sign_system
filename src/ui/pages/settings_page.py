@@ -837,7 +837,7 @@ class SettingsPage(QWidget):
             user_settings = {}
             try:
                 # 使用正确的配置文件路径
-                default_config_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign")
+                default_config_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign_system")
                 default_config_file = os.path.join(default_config_dir, "config.json")
                 
                 if os.path.exists(default_config_file):
@@ -1064,7 +1064,7 @@ class SettingsPage(QWidget):
             # 保存设置到系统配置文件
             try:
                 # 使用正确的配置文件路径
-                default_config_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign")
+                default_config_dir = os.path.join(os.path.expanduser("~"), ".wecom_live_sign_system")
                 if not os.path.exists(default_config_dir):
                     os.makedirs(default_config_dir)
                 

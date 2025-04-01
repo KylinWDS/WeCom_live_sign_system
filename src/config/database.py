@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 # 应用配置目录
-APP_CONFIG_DIR = os.path.join(Path.home(), '.wecom_live_sign')
+APP_CONFIG_DIR = os.path.join(Path.home(), '.wecom_live_sign_system')
 
 # 确保配置目录存在
 os.makedirs(APP_CONFIG_DIR, exist_ok=True)

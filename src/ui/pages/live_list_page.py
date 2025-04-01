@@ -850,11 +850,18 @@ class LiveListPage(QWidget):
             
             # 从企业微信API获取直播ID列表
             livingid_list = []
+            # 创建一个映射，记录每个直播ID是从哪个用户获取的
+            livingid_user_map = {}
+            
             for userid in user_ids_for_api:
                 try:
                     response = self.wecom_api.get_user_all_livingid(userid)
                     if response.get("errcode") == 0:
-                        livingid_list.extend(response.get("livingid_list", []))
+                        live_ids = response.get("livingid_list", [])
+                        for live_id in live_ids:
+                            # 记录这个直播ID是从哪个用户获取的
+                            livingid_user_map[live_id] = userid
+                        livingid_list.extend(live_ids)
                 except Exception as e:
                     logger.error(f"获取用户 {userid} 的直播列表失败: {str(e)}")
             
@@ -917,6 +924,16 @@ class LiveListPage(QWidget):
             created_count = 0
             
             with self.db_manager.get_session() as session:
+                # 创建用户ID到用户对象的映射，用于获取企业信息
+                user_objects = {}
+                from sqlalchemy import or_
+                for userid in user_ids_for_api:
+                    user = session.query(User).filter(
+                        or_(User.wecom_code == userid, User.login_name == userid)
+                    ).first()
+                    if user:
+                        user_objects[userid] = user
+                
                 for livingid in all_live_ids:
                     # 从企业微信获取数据
                     try:
@@ -999,8 +1016,24 @@ class LiveListPage(QWidget):
                                 exists.anchor_userid = final_data.get("anchor_userid", exists.anchor_userid)
                                 exists.description = final_data.get("description", exists.description)
                                 # type 和 status 已在上面处理，这里不再赋值
-                                exists.corpname = final_data.get("corpname", exists.corpname)
-                                exists.agentid = final_data.get("agentid", exists.agentid)
+                                
+                                # 更新企业信息字段
+                                if final_data.get("corpname"):
+                                    exists.corpname = final_data.get("corpname")
+                                elif not exists.corpname and livingid in livingid_user_map:
+                                    # 如果corpname为空且知道该直播从哪个用户获取
+                                    user_id = livingid_user_map[livingid]
+                                    if user_id in user_objects and user_objects[user_id].corpname:
+                                        exists.corpname = user_objects[user_id].corpname
+                                
+                                if final_data.get("agentid"):
+                                    exists.agentid = final_data.get("agentid")
+                                elif not exists.agentid and livingid in livingid_user_map:
+                                    # 如果agentid为空且知道该直播从哪个用户获取
+                                    user_id = livingid_user_map[livingid]
+                                    if user_id in user_objects and user_objects[user_id].agentid:
+                                        exists.agentid = user_objects[user_id].agentid
+                                
                                 exists.viewer_num = final_data.get("viewer_num", exists.viewer_num)
                                 exists.comment_num = final_data.get("comment_num", exists.comment_num)
                                 exists.mic_num = final_data.get("mic_num", exists.mic_num)
@@ -1050,6 +1083,19 @@ class LiveListPage(QWidget):
                                     }
                                     status_value = status_map.get(status_value, LivingStatus.RESERVED)
                                 
+                                # 获取企业信息，优先使用API数据，其次使用关联用户的企业信息
+                                corpname = final_data.get("corpname", "")
+                                agentid = final_data.get("agentid", "")
+                                
+                                # 如果企业信息为空，尝试从用户获取
+                                if (not corpname or not agentid) and livingid in livingid_user_map:
+                                    user_id = livingid_user_map[livingid]
+                                    if user_id in user_objects:
+                                        if not corpname and user_objects[user_id].corpname:
+                                            corpname = user_objects[user_id].corpname
+                                        if not agentid and user_objects[user_id].agentid:
+                                            agentid = user_objects[user_id].agentid
+                                
                                 new_living = Living(
                                     livingid=livingid,
                                     theme=final_data.get("theme", ""),
@@ -1059,8 +1105,8 @@ class LiveListPage(QWidget):
                                     description=final_data.get("description", ""),
                                     type=type_value,
                                     status=status_value,
-                                    corpname=final_data.get("corpname", ""),
-                                    agentid=final_data.get("agentid", ""),
+                                    corpname=corpname,
+                                    agentid=agentid,
                                     viewer_num=final_data.get("viewer_num", 0),
                                     comment_num=final_data.get("comment_num", 0),
                                     mic_num=final_data.get("mic_num", 0),
